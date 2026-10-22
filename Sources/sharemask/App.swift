@@ -67,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var meetings: MeetingCoordinator?
     private let preview = PreviewWindow()
     private let recorder = HotkeyRecorder()
+    private let updates = UpdateChecker()
     private let alerts = PromptPanel()
     private var options = ResolveOptions() { didSet { pipeline?.options = options; refreshMenu(); updateHUD() } }
     private var refreshTimer: Timer?
@@ -106,10 +107,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             relaunch: { [weak self] in self?.relaunch() },
             bringBackStrays: { [weak self] in self?.bringBackStrays() },
+            checkUpdates: { [weak self] in self?.updates.check(manual: true) },
+            updateNow: { [weak self] in self?.updates.updateNow() },
+            copyUpdateCommand: { [weak self] in self?.updates.copyCommand() },
+            openReleasePage: { [weak self] in self?.updates.openReleasePage() },
+            toggleUpdateChecks: { [weak self] in self?.updates.enabled.toggle(); self?.refreshMenu() },
             removeDisplay: { [weak self] in self?.bringBackStrays(forceRemove: true) },
             quit: { NSApp.terminate(nil) }))
         menuBar.onMenuWillOpen = { [weak self] in self?.refreshMenu(); self?.refreshAppMenus() }
 
+        updates.onChange = { [weak self] in self?.refreshMenu() }
+        updates.start()
         config.onChange = { [weak self] cfg in self?.applyConfig(cfg) }
         config.onError = { [weak self] _ in self?.refreshMenu() }
         config.start()
@@ -434,6 +442,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if p.state.isRunning, let m = meetings { latency += "\n" + m.statusText }
         }
 
+        menuBar.updateVersion(current: UpdateChecker.currentVersion, status: updates.status,
+                              checksEnabled: updates.enabled, homebrew: UpdateChecker.installedWithHomebrew)
         menuBar.update(status: status, latency: latency, warning: warning, running: running, panic: panic,
                        regionsEnabled: regions, pointerGuard: pointerGuardEnabled, hud: hudEnabled,
                        hotkeys: config.config.hotkeys, needsPermission: permissionMissing,

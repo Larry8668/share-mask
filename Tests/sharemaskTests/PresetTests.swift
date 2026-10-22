@@ -52,4 +52,11 @@ final class PresetTests: XCTestCase {
         XCTAssertNotEqual(VirtualDisplay.stableSerial(name: "sharemask", w: 2940, h: 1912),
                           VirtualDisplay.stableSerial(name: "sharemask", w: 1470, h: 956))
     }
+
+    func testVersionComparison() {
+        XCTAssertTrue(UpdateChecker.isNewer("0.1.10", than: "0.1.9"))
+        XCTAssertTrue(UpdateChecker.isNewer("0.2", than: "0.1.9"))
+        XCTAssertFalse(UpdateChecker.isNewer("0.1.4", than: "0.1.4"))
+        XCTAssertFalse(UpdateChecker.isNewer("0.1.3", than: "0.1.4"))
+    }
 }

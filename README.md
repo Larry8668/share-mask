@@ -106,6 +106,7 @@ The menu keeps the essentials on top; everything else is one level down.
 | Settings ▸ | | Shortcuts (press-to-remap), Launch at login, Pointer guard, status HUD. |
 | Troubleshooting ▸ | | Remove proxy display now, show log file, dump window list, relaunch. |
 | ⚠ Bring back N windows… | | Appears only if another app put a window on the hidden display. |
+| sharemask 0.1.x ▸ | | Version and update status. **Check for updates now**, release notes, copy the update command, and **Update now** when a newer release exists (runs `brew upgrade --cask sharemask` in Terminal and relaunches). |
 
 ### The proxy display exists only while capturing
 The “sharemask” display is created when capture starts (you accept the meeting prompt or press
@@ -235,6 +236,12 @@ Encoded in `VirtualDisplay.swift`; measured on macOS 27.0.1 with `make probe`:
 8. Created at the real display's pixel size with a ~110 DPI physical size, so macOS enters the
    native 1× mode. With a Retina-like DPI it would come up at half size. Note that
    `CGDisplayPixelsWide` returns *points* on Retina displays; the pixel size is read from the mode.
+
+## Network use
+
+sharemask makes exactly one kind of network request: once a day (and when you click "Check for
+updates now") it asks `api.github.com` for the latest release tag of this repo. Nothing about you or
+your screen is sent. Turn the daily check off under Settings ▸ Check for updates daily.
 
 ## Logs
 
