@@ -21,7 +21,10 @@ KEYCHAIN := $(HOME)/Library/Keychains/sharemask-dev.keychain-db
 KEYCHAIN_PW := sharemask
 SIGN_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/dev/null | grep -q '"sharemask-dev"' && echo sharemask-dev || echo -)
 
-.PHONY: all build bundle sign run test clean identity probe
+VERSION := $(shell /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" Resources/Info.plist 2>/dev/null || echo 0.0.0)
+ZIP := $(BUILD_DIR)/sharemask-$(VERSION).zip
+
+.PHONY: all build bundle sign run test clean identity probe release
 
 all: bundle
 
@@ -55,6 +58,13 @@ test:
 
 probe: bundle
 	"$(CONTENTS)/MacOS/$(APP_NAME)" --probe
+
+# Zip for GitHub Releases / the Homebrew cask. Prints the sha256 the cask needs.
+release: bundle
+	@rm -f "$(ZIP)"
+	ditto -c -k --keepParent "$(APP)" "$(ZIP)"
+	@echo "sha256: $$(shasum -a 256 "$(ZIP)" | cut -d' ' -f1)"
+	@echo "$(ZIP)"
 
 clean:
 	rm -rf .build "$(BUILD_DIR)"

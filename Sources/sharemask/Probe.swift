@@ -22,6 +22,13 @@ enum Probe {
         while let a = args.popFirst() {
             switch a {
             case "--no-create": create = false
+            case "--windows":
+                var cache: [pid_t: String?] = [:]
+                for w in WindowTracker.copyOnScreenWindows(bundleCache: &cache) {
+                    let b = w.boundsPoints
+                    print("win \(w.windowID) pid=\(w.pid) \(w.bundleID ?? "?") layer=\(w.layer) alpha=\(w.alpha) sharing=\(w.sharingState) bounds=(\(Int(b.minX)),\(Int(b.minY)) \(Int(b.width))x\(Int(b.height))) title=\(w.title ?? "")")
+                }
+                return 0
             case "--hidpi": hiDPI = (args.popFirst() ?? "0") != "0"
             case "--dpi": dpi = Double(args.popFirst() ?? "") ?? dpi
             case "--hold": hold = Double(args.popFirst() ?? "") ?? hold

@@ -5,3 +5,4 @@ build/
 .swiftpm/
 *.dSYM
 docs/internal/
+core/target/

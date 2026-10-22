@@ -36,6 +36,17 @@ final class Pipeline {
     private var _config = PresetConfig.empty
     private var _regionsEnabled = true
     private var _demoRegions: [PixelRegion] = []
+    private var _options = ResolveOptions()
+    private var lastOutput: CIImage?
+    private var lastFrameAt: Double = 0
+    private var watchdog: DispatchSourceTimer?
+    /// Main thread. Fired once per stall (no frames for `stallTimeout` while running).
+    var onStall: ((String) -> Void)?
+    var stallTimeout: TimeInterval = 3
+    private var stalled = false
+    /// Main thread. Called with the last rendered output for the preview window (~10 Hz).
+    var onPreview: ((CIImage) -> Void)?
+    private var lastPreviewAt: Double = 0
     private var lastFrame: CVPixelBuffer?
     private var lastPTS = CMTime.zero
     private var lastRegions: [PixelRegion] = []
@@ -61,6 +72,10 @@ final class Pipeline {
     var config: PresetConfig {
         get { lock.lock(); defer { lock.unlock() }; return _config }
         set { lock.lock(); _config = newValue; lock.unlock(); requestRerender() }
+    }
+    var options: ResolveOptions {
+        get { lock.lock(); defer { lock.unlock() }; return _options }
+        set { lock.lock(); _options = newValue; lock.unlock(); requestRerender() }
     }
     var regionsEnabled: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _regionsEnabled }
@@ -100,6 +115,7 @@ final class Pipeline {
         tracker.start()
         installReconfigurationCallback()
         startRerenderTimer()
+        startWatchdog()
         if captureWanted {
             Task { await startCapture() }
         } else {
@@ -153,6 +169,53 @@ final class Pipeline {
         }
     }
 
+    // MARK: Watchdog (fail closed)
+
+    /// While capture is supposed to be running, frames must keep arriving (SCK sends at least one
+    /// every second even for a static screen). If none arrive for `stallTimeout`, the proxy is shown
+    /// BLACK (never a stale frame), capture is restarted, and `onStall` fires so the UI can warn.
+    private func startWatchdog() {
+        watchdog?.cancel()
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + 1, repeating: 1)
+        t.setEventHandler { [weak self] in self?.checkStall() }
+        t.resume()
+        watchdog = t
+    }
+
+    private func checkStall() {
+        guard state == .running, let cap = capture else { stalled = false; return }
+        lock.lock(); let last = lastFrameAt; lock.unlock()
+        let age = FrameClock.hostSeconds() - last
+        guard last > 0, age > stallTimeout, !stalled else { return }
+        stalled = true
+        Log.error("watchdog: no frames for \(Int(age)) s — blacking out proxy and restarting capture")
+        presentBlack()
+        capture = nil
+        Task {
+            await cap.stop()
+            await startCapture()
+            await MainActor.run { self.stalled = false }
+        }
+        onStall?("Capture stalled for \(Int(age)) s; proxy blacked out and capture restarted")
+    }
+
+    /// Emergency stop: stop capture, black the proxy, and remove the virtual display. Meeting apps
+    /// end a share whose source display disappears, so this ends the share from their side too.
+    /// Irreversible for this process (the display can be re-created, see App.relaunch).
+    func endShare() {
+        Log.error("END SHARE requested: stopping capture and removing the virtual display")
+        presentBlack()
+        stop()
+        presenter.close()
+        do { let t = try virtualDisplay.release(); Log.info("virtual display removed in \(Int(t * 1000)) ms") }
+        catch { Log.error("\(error)") }
+        state = .error("Share ended: virtual display removed. Relaunch sharemask to create it again.")
+    }
+
+    /// Last rendered output (for the preview window).
+    var lastRenderedImage: CIImage? { lock.lock(); defer { lock.unlock() }; return lastOutput }
+
     private func presentBlack() {
         let size = source.geometry.pixelSize
         let black = CIImage(color: CIColor(red: 0, green: 0, blue: 0)).cropped(to: CGRect(origin: .zero, size: size))
@@ -205,6 +268,7 @@ final class Pipeline {
         guard state == .running || state == .starting || state == .waitingForWatcher || isError else { return }
         rerenderTimer?.cancel(); rerenderTimer = nil
         idleTimer?.cancel(); idleTimer = nil
+        watchdog?.cancel(); watchdog = nil
         tracker.stop()
         let cap = capture
         capture = nil
@@ -272,6 +336,7 @@ final class Pipeline {
         lock.lock()
         lastFrame = buffer
         lastPTS = pts
+        lastFrameAt = FrameClock.hostSeconds()
         if pending != nil { clock.recordDropped() }
         pending = (buffer, pts)
         let shouldSchedule = !rendering
@@ -297,6 +362,13 @@ final class Pipeline {
         let image = redactor.process(buffer, regions: regions)
         presenter.present(image) { [clock] gpu in clock.recordGPU(seconds: gpu) }
         clock.recordPresented(samplePTS: pts, callbackEntry: entry)
+        lock.lock()
+        lastOutput = image
+        let now = FrameClock.hostSeconds()
+        let preview = now - lastPreviewAt > 0.1 && onPreview != nil
+        if preview { lastPreviewAt = now }
+        lock.unlock()
+        if preview { DispatchQueue.main.async { self.onPreview?(image) } }
     }
 
     private func currentRegions() -> [PixelRegion] {
@@ -305,8 +377,9 @@ final class Pipeline {
         lock.unlock()
         guard enabled else { return [] }
         let snap = tracker.latest
+        lock.lock(); let opts = _options; lock.unlock()
         var regions = RegionResolver.resolve(presets: cfg, windows: snap.windows, display: source.geometry,
-                                             frontmostBundleID: snap.frontmostBundleID, ignorePIDs: [getpid()])
+                                             frontmostBundleID: snap.frontmostBundleID, ignorePIDs: [getpid()], options: opts)
         regions.append(contentsOf: demo)
         return regions
     }

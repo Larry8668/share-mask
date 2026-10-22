@@ -4,17 +4,19 @@ import AppKit
 /// Global hotkeys via Carbon `RegisterEventHotKey` (works when any app is frontmost, no
 /// Accessibility permission required). Strings look like "cmd+shift+ctrl+B".
 final class Hotkeys {
-    enum Action: UInt32, CaseIterable { case panic = 1, toggle = 2, pick = 3 }
+    enum Action: UInt32, CaseIterable { case panic = 1, toggle = 2, pick = 3, reveal = 4, allowlist = 5, endShare = 6 }
 
     private var refs: [Action: EventHotKeyRef] = [:]
     private var handlerRef: EventHandlerRef?
     private var handlers: [Action: () -> Void] = [:]
+    private var releaseHandlers: [Action: () -> Void] = [:]
     private static var shared: Hotkeys?
 
     init() { Hotkeys.shared = self }
 
-    func set(_ action: Action, combo: String?, handler: @escaping () -> Void) {
+    func set(_ action: Action, combo: String?, handler: @escaping () -> Void, onRelease: (() -> Void)? = nil) {
         unregister(action)
+        releaseHandlers[action] = onRelease
         guard let combo = combo, !combo.isEmpty, let (key, mods) = Hotkeys.parse(combo) else {
             if let c = combo, !c.isEmpty { Log.warn("hotkey '\(c)' for \(action) not understood") }
             return
@@ -34,20 +36,28 @@ final class Hotkeys {
     func unregister(_ action: Action) {
         if let r = refs.removeValue(forKey: action) { UnregisterEventHotKey(r) }
         handlers[action] = nil
+        releaseHandlers[action] = nil
     }
 
     func unregisterAll() { Action.allCases.forEach(unregister) }
 
     private func installHandlerIfNeeded() {
         guard handlerRef == nil else { return }
-        var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        var specs = [EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+                     EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased))]
         InstallEventHandler(GetApplicationEventTarget(), { _, event, _ -> OSStatus in
+            guard let event = event else { return noErr }
             var id = EventHotKeyID()
             GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
                               nil, MemoryLayout<EventHotKeyID>.size, nil, &id)
-            if let action = Action(rawValue: id.id), let h = Hotkeys.shared?.handlers[action] { h() }
+            guard let action = Action(rawValue: id.id) else { return noErr }
+            if GetEventKind(event) == UInt32(kEventHotKeyReleased) {
+                Hotkeys.shared?.releaseHandlers[action]?()
+            } else {
+                Hotkeys.shared?.handlers[action]?()
+            }
             return noErr
-        }, 1, &spec, nil, &handlerRef)
+        }, 2, &specs, nil, &handlerRef)
     }
 
     /// "cmd+shift+ctrl+B" → (virtual key code, carbon modifier mask)

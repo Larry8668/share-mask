@@ -12,6 +12,11 @@ final class MenuBar: NSObject, NSMenuDelegate {
         var pick: () -> Void
         var pickFor: (pid_t, String) -> Void
         var removeApp: (String) -> Void
+        var toggleMask: (String) -> Void          // disable key
+        var toggleAllowlist: () -> Void
+        var togglePreview: () -> Void
+        var endShare: () -> Void
+        var dumpWindows: () -> Void
         var openPresets: () -> Void
         var openLogs: () -> Void
         var reloadPresets: () -> Void
@@ -32,6 +37,10 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let pickItem = NSMenuItem()
     private let pickForItem = NSMenuItem()
     private let configuredItem = NSMenuItem()
+    private let masksItem = NSMenuItem()
+    private let allowlistItem = NSMenuItem()
+    private let previewItem = NSMenuItem()
+    private let endShareItem = NSMenuItem()
     private let pointerItem = NSMenuItem()
     private let hudItem = NSMenuItem()
     private let statusLine = NSMenuItem()
@@ -82,6 +91,20 @@ final class MenuBar: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(panicItem)
         menu.addItem(regionsItem)
+        allowlistItem.title = "Allowlist mode (mask everything except allowed apps)"
+        bind(allowlistItem, #selector(toggleAllowlist))
+        menu.addItem(allowlistItem)
+        masksItem.title = "Masks"
+        masksItem.submenu = NSMenu()
+        menu.addItem(masksItem)
+        menu.addItem(.separator())
+        previewItem.title = "Show “what others see” preview"
+        bind(previewItem, #selector(togglePreview))
+        menu.addItem(previewItem)
+        endShareItem.title = "End share now (remove proxy display)"
+        bind(endShareItem, #selector(endShare))
+        menu.addItem(endShareItem)
+        menu.addItem(.separator())
         menu.addItem(pickItem)
         pickForItem.title = "Pick regions for app"
         pickForItem.submenu = NSMenu()
@@ -93,6 +116,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         menu.addItem(withTitle: "Open presets.json", action: #selector(openPresets), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Reload presets", action: #selector(reloadPresets), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Show log file", action: #selector(openLogs), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Dump window list to log", action: #selector(dumpWindows), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(pointerItem)
         menu.addItem(hudItem)
@@ -124,8 +148,13 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
     func update(status: String, latency: String, warning: String?, running: Bool, panic: Bool,
                 regionsEnabled: Bool, pointerGuard: Bool, hud: Bool, hotkeys: HotkeyConfig, needsPermission: Bool,
-                needsRelaunch: Bool) {
+                needsRelaunch: Bool, allowlistMode: Bool, previewShown: Bool) {
         relaunchItem.isHidden = !needsRelaunch
+        allowlistItem.state = allowlistMode ? .on : .off
+        MenuBar.setKey(allowlistItem, hotkeys.allowlist)
+        previewItem.state = previewShown ? .on : .off
+        endShareItem.title = "End share now (remove proxy display)"
+        MenuBar.setKey(endShareItem, hotkeys.endShare)
         statusLine.title = status
         latencyLine.title = latency
         warningLine.title = warning.map { "⚠ \($0)" } ?? ""
@@ -165,6 +194,34 @@ final class MenuBar: NSObject, NSMenuDelegate {
     }
 
     struct RunningApp { var name: String; var pid: pid_t; var bundleID: String }
+    struct MaskEntry { var title: String; var key: String; var enabled: Bool }
+
+    /// Masks submenu: one checkbox per app/region/rule; unchecking disables it until re-checked.
+    func updateMasks(_ entries: [MaskEntry], revealHotkey: String?) {
+        let m = masksItem.submenu!
+        m.removeAllItems()
+        let hint = NSMenuItem(title: "Hold \(Hotkeys.pretty(revealHotkey)) to reveal the frontmost app", action: nil, keyEquivalent: "")
+        hint.isEnabled = false
+        m.addItem(hint)
+        m.addItem(.separator())
+        if entries.isEmpty { m.addItem(withTitle: "No masks configured", action: nil, keyEquivalent: "") }
+        for e in entries {
+            let mi = NSMenuItem(title: e.title, action: #selector(toggleMask(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = e.key
+            mi.state = e.enabled ? .on : .off
+            mi.indentationLevel = e.key.contains("/") ? 1 : 0
+            m.addItem(mi)
+        }
+    }
+
+    @objc private func toggleMask(_ sender: NSMenuItem) {
+        if let key = sender.representedObject as? String { actions.toggleMask(key) }
+    }
+    @objc private func toggleAllowlist() { actions.toggleAllowlist() }
+    @objc private func togglePreview() { actions.togglePreview() }
+    @objc private func endShare() { actions.endShare() }
+    @objc private func dumpWindows() { actions.dumpWindows() }
     struct ConfiguredApp { var name: String; var bundleID: String; var regionCount: Int; var pid: pid_t? }
 
     /// Rebuilds the two app submenus (called when the menu is about to open).

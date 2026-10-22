@@ -65,6 +65,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pointerGuard: PointerGuard?
     private var picker: RegionPicker?
     private var meetings: MeetingCoordinator?
+    private let preview = PreviewWindow()
+    private let alerts = PromptPanel()
+    private var options = ResolveOptions() { didSet { pipeline?.options = options; refreshMenu(); updateHUD() } }
     private var refreshTimer: Timer?
     private var permissionMissing = false
     private var pointerGuardEnabled = true
@@ -85,6 +88,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             removeApp: { [weak self] bundleID in
                 do { try self?.config.removeApp(bundleID: bundleID) } catch { self?.alert("Could not update presets.json", "\(error)") }
             },
+            toggleMask: { [weak self] key in self?.toggleMask(key) },
+            toggleAllowlist: { [weak self] in self?.toggleAllowlist() },
+            togglePreview: { [weak self] in self?.togglePreview() },
+            endShare: { [weak self] in self?.endShare(confirm: true) },
+            dumpWindows: { [weak self] in self?.dumpWindows() },
             openPresets: { NSWorkspace.shared.open(ConfigStore.fileURL) },
             openLogs: { NSWorkspace.shared.activateFileViewerSelecting([Log.fileURL]) },
             reloadPresets: { [weak self] in self?.config.reload() },
@@ -117,6 +125,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         meetings = mc
         if demo { p.setDemoRegions([CGRect(x: 100, y: 100, width: 400, height: 300)]) }
         p.onStateChange = { [weak self] _ in self?.refreshMenu() }
+        p.onStall = { [weak self] msg in self?.stallAlert(msg) }
+        p.onPreview = { [weak self] img in
+            guard let self = self, let p = self.pipeline else { return }
+            self.preview.update(img, status: "\(p.panic ? "PANIC · " : "")\(self.options.allowlistMode ? "allowlist · " : "")\(p.clock.summary().fps.rounded()) fps")
+        }
         pipeline = p
         pointerGuard = PointerGuard(virtualDisplayID: vd.displayID, sourceDisplayID: launch.source.id)
         p.start()
@@ -124,6 +137,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refreshMenu() }
         refreshMenu()
+        if ProcessInfo.processInfo.environment["SHAREMASK_DUMP_WINDOWS"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.dumpWindows() }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -149,6 +165,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeys.set(.panic, combo: cfg.hotkeys.panic) { [weak self] in DispatchQueue.main.async { self?.togglePanic() } }
         hotkeys.set(.toggle, combo: cfg.hotkeys.toggle) { [weak self] in DispatchQueue.main.async { self?.toggleRegions() } }
         hotkeys.set(.pick, combo: cfg.hotkeys.pick) { [weak self] in DispatchQueue.main.async { self?.pickRegion() } }
+        hotkeys.set(.reveal, combo: cfg.hotkeys.reveal,
+                    handler: { [weak self] in DispatchQueue.main.async { self?.setReveal(true) } },
+                    onRelease: { [weak self] in DispatchQueue.main.async { self?.setReveal(false) } })
+        hotkeys.set(.allowlist, combo: cfg.hotkeys.allowlist) { [weak self] in DispatchQueue.main.async { self?.toggleAllowlist() } }
+        hotkeys.set(.endShare, combo: cfg.hotkeys.endShare) { [weak self] in DispatchQueue.main.async { self?.endShare(confirm: false) } }
         pointerGuardEnabled = cfg.pointerGuard
         hudEnabled = cfg.hud
         updatePointerGuard()
@@ -210,6 +231,95 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         picker.begin()
     }
 
+    // MARK: Masks / reveal / allowlist / end share / preview
+
+    /// Hold-to-reveal: while the hotkey is down, the frontmost app is shown unmasked.
+    private func setReveal(_ on: Bool) {
+        guard let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return }
+        if on {
+            options.revealed.insert(front)
+            Log.info("reveal ON for \(front)")
+        } else {
+            options.revealed.removeAll()
+            Log.info("reveal off")
+        }
+    }
+
+    private func toggleMask(_ key: String) {
+        if options.disabled.contains(key) { options.disabled.remove(key) } else { options.disabled.insert(key) }
+        Log.info("mask \(key) \(options.disabled.contains(key) ? "disabled" : "enabled")")
+    }
+
+    private func toggleAllowlist() {
+        options.allowlistMode.toggle()
+        Log.info("allowlist mode \(options.allowlistMode ? "ON" : "off") (\(config.config.allowlist))")
+        if options.allowlistMode && config.config.allowlist.isEmpty {
+            alerts.show(title: "Allowlist mode is on, but the allowlist is empty", detail: "Everything is masked. Add bundle IDs to \"allowlist\" in presets.json (e.g. com.apple.Keynote).",
+                        primary: "OK", secondary: "Open presets", timeout: 15, onPrimary: {}, onSecondary: { NSWorkspace.shared.open(ConfigStore.fileURL) })
+        }
+    }
+
+    private func togglePreview() {
+        preview.toggle(sourceDisplayID: launch.source.id)
+        if preview.isVisible, let img = pipeline?.lastRenderedImage { preview.update(img, status: "") }
+        refreshMenu()
+    }
+
+    private func endShare(confirm: Bool) {
+        guard let p = pipeline else { return }
+        let go = { [weak self] in
+            p.endShare()
+            self?.alerts.show(title: "Share ended — proxy display removed", detail: "Your call app lost its source display. Relaunch sharemask to create it again.",
+                              primary: "Relaunch", secondary: "Quit", timeout: 120,
+                              onPrimary: { self?.relaunch() }, onSecondary: { NSApp.terminate(nil) })
+            self?.refreshMenu()
+        }
+        if confirm {
+            alerts.show(title: "End the share now?", detail: "This removes the “sharemask” display, which ends the share in your call app.",
+                        primary: "End share", secondary: "Cancel", timeout: 30, onPrimary: go, onSecondary: {})
+        } else { go() }
+    }
+
+    private func stallAlert(_ message: String) {
+        Log.error("ALERT: \(message)")
+        menuBar.setIcon(.error)
+        alerts.show(title: "sharemask: capture stalled", detail: message + ". Viewers see black until frames resume. End the share if it doesn't recover.",
+                    primary: "End share now", secondary: "Keep going", timeout: 30,
+                    onPrimary: { [weak self] in self?.endShare(confirm: false) }, onSecondary: {})
+    }
+
+    private func dumpWindows() {
+        var cache: [pid_t: String?] = [:]
+        let list = WindowTracker.copyOnScreenWindows(bundleCache: &cache)
+        Log.info("window dump (\(list.count) windows, front to back):")
+        for w in list {
+            let b = w.boundsPoints
+            Log.info("  win \(w.windowID) pid=\(w.pid) \(w.bundleID ?? "?") layer=\(w.layer) alpha=\(w.alpha) sharing=\(w.sharingState) bounds=(\(Int(b.minX)),\(Int(b.minY)) \(Int(b.width))x\(Int(b.height))) title=\(w.title ?? "")")
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([Log.fileURL])
+    }
+
+    private func masksEntries() -> [MenuBar.MaskEntry] {
+        var out: [MenuBar.MaskEntry] = []
+        let cfg = config.config
+        for (bundleID, app) in cfg.apps.sorted(by: { $0.key < $1.key }) {
+            let name = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName ?? bundleID
+            out.append(.init(title: name, key: bundleID, enabled: !options.disabled.contains(bundleID)))
+            for r in app.regions {
+                let key = "\(bundleID)/\(r.name)"
+                out.append(.init(title: r.name, key: key, enabled: !options.disabled.contains(key) && !options.disabled.contains(bundleID)))
+            }
+        }
+        for rule in cfg.rules {
+            out.append(.init(title: "Rule: \(rule.name)", key: "rule:\(rule.name)", enabled: !options.disabled.contains("rule:\(rule.name)")))
+        }
+        if cfg.maskNotifications {
+            out.append(.init(title: "Notification banners", key: RegionResolver.notificationCenterBundleID,
+                             enabled: !options.disabled.contains(RegionResolver.notificationCenterBundleID)))
+        }
+        return out
+    }
+
     private func togglePointerGuard() { pointerGuardEnabled.toggle(); updatePointerGuard(); refreshMenu() }
     private func toggleHUD() { hudEnabled.toggle(); updateHUD(); refreshMenu() }
 
@@ -241,6 +351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return MenuBar.ConfiguredApp(name: name, bundleID: bundleID, regionCount: app.regions.count, pid: proc?.pid)
         }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         menuBar.updateApps(running: running, configured: configured)
+        menuBar.updateMasks(masksEntries(), revealHotkey: config.config.hotkeys.reveal)
     }
 
     // MARK: Menu refresh
@@ -282,13 +393,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 warning = (warning.map { $0 + " · " } ?? "") + "virtual display mode was changed; teardown requires relaunch"
             }
             if p.panic && p.state.isRunning { status = "PANIC — whole feed redacted" }
+            if options.allowlistMode && p.state.isRunning { status += " · ALLOWLIST" }
+            if !options.revealed.isEmpty { status += " · REVEALING \(options.revealed.joined(separator: ","))" }
             if p.state.isRunning, let m = meetings { latency += "\n" + m.statusText }
         }
 
         menuBar.update(status: status, latency: latency, warning: warning, running: running, panic: panic,
                        regionsEnabled: regions, pointerGuard: pointerGuardEnabled, hud: hudEnabled,
                        hotkeys: config.config.hotkeys, needsPermission: permissionMissing,
-                       needsRelaunch: pipeline?.needsRelaunch ?? false)
+                       needsRelaunch: pipeline?.needsRelaunch ?? false, allowlistMode: options.allowlistMode,
+                       previewShown: preview.isVisible)
     }
 
     /// Quit and start a fresh instance (needed after Screen Recording is granted to a running app).

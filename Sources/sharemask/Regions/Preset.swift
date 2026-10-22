@@ -46,10 +46,31 @@ struct AppPreset: Equatable {
     var whenFrontmostOnly: Bool
 }
 
+/// A rule matched against any window: by bundle ID and/or a case-insensitive title substring.
+/// Lets one browser bundle carry different masks for "WhatsApp", "Gmail", … tabs.
+struct MaskRule: Equatable {
+    var name: String
+    var bundleID: String?
+    var titleContains: String?
+    var regions: [PresetRegion]
+    var whenFrontmostOnly: Bool
+
+    func matches(_ w: TrackedWindow) -> Bool {
+        if let b = bundleID, b != w.bundleID { return false }
+        if let t = titleContains {
+            guard let title = w.title, title.range(of: t, options: .caseInsensitive) != nil else { return false }
+        }
+        return bundleID != nil || titleContains != nil
+    }
+}
+
 struct HotkeyConfig: Equatable {
     var panic: String?
     var toggle: String?
     var pick: String?
+    var reveal: String?       // hold to temporarily unmask the frontmost app
+    var allowlist: String?    // toggle allowlist mode
+    var endShare: String?     // emergency: remove the virtual display (ends the share)
 }
 
 /// The fully-resolved in-memory form of ~/.config/sharemask/presets.json.
@@ -57,6 +78,11 @@ struct PresetConfig: Equatable {
     var version: Int
     var defaultMode: RedactMode
     var apps: [String: AppPreset]          // keyed by bundle identifier
+    var rules: [MaskRule]
+    /// Allowlist mode: everything is masked except these bundle IDs (toggle with the hotkey/menu).
+    var allowlist: [String]
+    /// Mask macOS notification banners (Notification Center windows) automatically.
+    var maskNotifications: Bool
     var hotkeys: HotkeyConfig
     var pointerGuard: Bool
     var hud: Bool
@@ -66,10 +92,14 @@ struct PresetConfig: Equatable {
     /// Look at upcoming calendar events (needs Calendar access) to prompt before a meeting starts.
     var calendarLookahead: Bool
 
-    static let empty = PresetConfig(version: 1, defaultMode: .defaultPixellate, apps: [:],
+    static let empty = PresetConfig(version: 1, defaultMode: .defaultPixellate, apps: [:], rules: [], allowlist: [],
+                                    maskNotifications: true,
                                     hotkeys: HotkeyConfig(panic: "cmd+shift+ctrl+B",
                                                           toggle: "cmd+shift+ctrl+M",
-                                                          pick: "cmd+shift+ctrl+P"),
+                                                          pick: "cmd+shift+ctrl+P",
+                                                          reveal: "cmd+shift+ctrl+R",
+                                                          allowlist: "cmd+shift+ctrl+A",
+                                                          endShare: "cmd+shift+ctrl+X"),
                                     pointerGuard: true, hud: false, captureMode: "ask", calendarLookahead: false)
 }
 
@@ -101,10 +131,23 @@ struct PresetFile: Codable {
         var panic: String?
         var toggle: String?
         var pick: String?
+        var reveal: String?
+        var allowlist: String?
+        var endShare: String?
+    }
+    struct Rule: Codable {
+        var name: String?
+        var bundleID: String?
+        var titleContains: String?
+        var regions: [Region]
+        var whenFrontmostOnly: Bool?
     }
     var version: Int?
     var defaults: Defaults?
     var apps: [String: App]?
+    var rules: [Rule]?
+    var allowlist: [String]?
+    var maskNotifications: Bool?
     var hotkeys: Hotkeys?
     var pointerGuard: Bool?
     var hud: Bool?
@@ -143,29 +186,43 @@ extension PresetConfig {
         let defaultMode = try mode(name: d?.mode ?? "pixellate", scale: d?.scale, radius: d?.radius,
                                    color: d?.color, fallback: .defaultPixellate)
 
-        var apps: [String: AppPreset] = [:]
-        for (bundleID, app) in file.apps ?? [:] {
+        func parseRegions(_ list: [PresetFile.Region], owner: String) throws -> [PresetRegion] {
             var regions: [PresetRegion] = []
-            for (i, r) in app.regions.enumerated() {
+            for (i, r) in list.enumerated() {
                 let name = r.name ?? "region \(i + 1)"
-                guard r.rect.count == 4 else { throw PresetError.badRect(app: bundleID, region: name) }
+                guard r.rect.count == 4 else { throw PresetError.badRect(app: owner, region: name) }
                 let rect = CGRect(x: r.rect[0], y: r.rect[1], width: r.rect[2], height: r.rect[3])
                 guard rect.width > 0, rect.height > 0,
                       rect.minX >= 0, rect.minY >= 0, rect.maxX <= 1.0001, rect.maxY <= 1.0001
-                else { throw PresetError.badRect(app: bundleID, region: name) }
+                else { throw PresetError.badRect(app: owner, region: name) }
                 let m = try mode(name: r.mode ?? d?.mode ?? "pixellate",
                                  scale: r.scale ?? d?.scale, radius: r.radius ?? d?.radius,
                                  color: r.color ?? d?.color, fallback: defaultMode)
                 let shape = RegionShape(rawValue: (r.shape ?? "rect").lowercased()) ?? .rect
                 regions.append(PresetRegion(name: name, rect: rect.clamped01, mode: m, shape: shape))
             }
-            apps[bundleID] = AppPreset(regions: regions, whenFrontmostOnly: app.whenFrontmostOnly ?? false)
+            return regions
         }
 
-        let hk = HotkeyConfig(panic: file.hotkeys?.panic ?? PresetConfig.empty.hotkeys.panic,
-                              toggle: file.hotkeys?.toggle ?? PresetConfig.empty.hotkeys.toggle,
-                              pick: file.hotkeys?.pick ?? PresetConfig.empty.hotkeys.pick)
-        return PresetConfig(version: version, defaultMode: defaultMode, apps: apps, hotkeys: hk,
+        var apps: [String: AppPreset] = [:]
+        for (bundleID, app) in file.apps ?? [:] {
+            apps[bundleID] = AppPreset(regions: try parseRegions(app.regions, owner: bundleID),
+                                       whenFrontmostOnly: app.whenFrontmostOnly ?? false)
+        }
+        var rules: [MaskRule] = []
+        for (i, r) in (file.rules ?? []).enumerated() {
+            let name = r.name ?? "rule \(i + 1)"
+            rules.append(MaskRule(name: name, bundleID: r.bundleID, titleContains: r.titleContains,
+                                  regions: try parseRegions(r.regions, owner: name),
+                                  whenFrontmostOnly: r.whenFrontmostOnly ?? false))
+        }
+
+        let e = PresetConfig.empty.hotkeys
+        let hk = HotkeyConfig(panic: file.hotkeys?.panic ?? e.panic, toggle: file.hotkeys?.toggle ?? e.toggle,
+                              pick: file.hotkeys?.pick ?? e.pick, reveal: file.hotkeys?.reveal ?? e.reveal,
+                              allowlist: file.hotkeys?.allowlist ?? e.allowlist, endShare: file.hotkeys?.endShare ?? e.endShare)
+        return PresetConfig(version: version, defaultMode: defaultMode, apps: apps, rules: rules,
+                            allowlist: file.allowlist ?? [], maskNotifications: file.maskNotifications ?? true, hotkeys: hk,
                             pointerGuard: file.pointerGuard ?? true, hud: file.hud ?? false,
                             captureMode: captureMode(file), calendarLookahead: file.calendarLookahead ?? false)
     }

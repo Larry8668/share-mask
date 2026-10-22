@@ -66,6 +66,7 @@ final class WindowTracker {
             let layer = info[kCGWindowLayer as String] as? Int ?? 0
             let alpha = info[kCGWindowAlpha as String] as? CGFloat ?? 1
             let sharing = info[kCGWindowSharingState as String] as? Int ?? 1
+            let title = info[kCGWindowName as String] as? String
             let bundle: String?
             if let cached = bundleCache[pid] {
                 bundle = cached
@@ -74,7 +75,7 @@ final class WindowTracker {
                 bundleCache[pid] = .some(bundle)
             }
             result.append(TrackedWindow(windowID: number, pid: pid, bundleID: bundle, boundsPoints: bounds,
-                                        layer: layer, alpha: alpha, sharingState: sharing))
+                                        layer: layer, alpha: alpha, sharingState: sharing, title: title))
         }
         // PIDs come and go; keep the cache bounded.
         if bundleCache.count > 512 { bundleCache.removeAll() }

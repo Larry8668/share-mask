@@ -183,3 +183,62 @@ final class EllipseTests: XCTestCase {
         XCTAssertEqual(c.apps["a"]!.regions[1].shape, .rect)
     }
 }
+
+final class ResolverOptionsTests: XCTestCase {
+    let display = DisplayGeometry(boundsPoints: CGRect(x: 0, y: 0, width: 1000, height: 1000), scale: 1, pixelSize: CGSize(width: 1000, height: 1000))
+    func w(_ id: UInt32, _ b: String?, _ r: CGRect, title: String? = nil, layer: Int = 0) -> TrackedWindow {
+        TrackedWindow(windowID: id, pid: 1, bundleID: b, boundsPoints: r, layer: layer, alpha: 1, sharingState: 1, title: title)
+    }
+    var base: PresetConfig {
+        var c = PresetConfig.empty
+        c.apps["chat"] = AppPreset(regions: [PresetRegion(name: "list", rect: CGRect(x: 0, y: 0, width: 0.5, height: 1), mode: .defaultPixellate)], whenFrontmostOnly: false)
+        c.rules = [MaskRule(name: "wa-web", bundleID: nil, titleContains: "whatsapp",
+                            regions: [PresetRegion(name: "all", rect: CGRect(x: 0, y: 0, width: 1, height: 1), mode: .defaultPixellate)], whenFrontmostOnly: false)]
+        c.allowlist = ["slides"]
+        return c
+    }
+    func testTitleRuleMatchesAnyBundle() {
+        let out = RegionResolver.resolve(presets: base, windows: [w(1, "browser", CGRect(x: 0, y: 0, width: 200, height: 200), title: "WhatsApp Web — Arc")], display: display, frontmostBundleID: nil)
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].rect, CGRect(x: 0, y: 800, width: 200, height: 200))
+        XCTAssertTrue(RegionResolver.resolve(presets: base, windows: [w(1, "browser", CGRect(x: 0, y: 0, width: 200, height: 200), title: "Gmail")], display: display, frontmostBundleID: nil).isEmpty)
+    }
+    func testRevealedAndDisabledSkipMasks() {
+        let win = [w(1, "chat", CGRect(x: 0, y: 0, width: 200, height: 200))]
+        XCTAssertEqual(RegionResolver.resolve(presets: base, windows: win, display: display, frontmostBundleID: nil).count, 1)
+        XCTAssertTrue(RegionResolver.resolve(presets: base, windows: win, display: display, frontmostBundleID: nil, options: ResolveOptions(revealed: ["chat"])).isEmpty)
+        XCTAssertTrue(RegionResolver.resolve(presets: base, windows: win, display: display, frontmostBundleID: nil, options: ResolveOptions(disabled: ["chat/list"])).isEmpty)
+        XCTAssertTrue(RegionResolver.resolve(presets: base, windows: win, display: display, frontmostBundleID: nil, options: ResolveOptions(disabled: ["chat"])).isEmpty)
+    }
+    func testAllowlistMasksEverythingButAllowedWindows() {
+        // Allowed "slides" window in the middle, a non-allowed window in front covering its left part.
+        let slides = w(1, "slides", CGRect(x: 200, y: 200, width: 400, height: 400))
+        let front = w(2, "other", CGRect(x: 100, y: 100, width: 200, height: 600))
+        let out = RegionResolver.resolve(presets: base, windows: [front, slides], display: display, frontmostBundleID: nil, options: ResolveOptions(allowlistMode: true))
+        XCTAssertFalse(out.isEmpty)
+        func masked(_ x: CGFloat, _ yTop: CGFloat) -> Bool { out.contains { $0.rect.contains(CGPoint(x: x, y: 1000 - yTop)) } }
+        XCTAssertTrue(masked(50, 50))        // desktop
+        XCTAssertTrue(masked(150, 300))      // the non-allowed front window
+        XCTAssertTrue(masked(250, 300))      // slides part hidden under the front window
+        XCTAssertFalse(masked(450, 400))     // visible slides content stays sharp
+        XCTAssertTrue(masked(700, 700))
+    }
+    func testNotificationBannerMaskedAtAnyLayer() {
+        let banner = w(9, RegionResolver.notificationCenterBundleID, CGRect(x: 600, y: 40, width: 380, height: 90), layer: 25)
+        let out = RegionResolver.resolve(presets: base, windows: [banner], display: display, frontmostBundleID: nil)
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].mode, .solid(color: .black))
+        var off = base; off.maskNotifications = false
+        XCTAssertTrue(RegionResolver.resolve(presets: off, windows: [banner], display: display, frontmostBundleID: nil).isEmpty)
+    }
+    func testRulesParseFromJSON() throws {
+        let json = #"{"rules":[{"name":"wa","titleContains":"WhatsApp","regions":[{"rect":[0,0,1,1]}]}],"allowlist":["a.b"],"maskNotifications":false,"hotkeys":{"reveal":"cmd+shift+ctrl+R"}}"#
+        let c = try PresetConfig.parse(data: json.data(using: .utf8)!)
+        XCTAssertEqual(c.rules.count, 1)
+        XCTAssertEqual(c.rules[0].titleContains, "WhatsApp")
+        XCTAssertEqual(c.allowlist, ["a.b"])
+        XCTAssertFalse(c.maskNotifications)
+        XCTAssertEqual(c.hotkeys.reveal, "cmd+shift+ctrl+R")
+        XCTAssertEqual(c.hotkeys.endShare, "cmd+shift+ctrl+X")
+    }
+}

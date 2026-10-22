@@ -1,8 +1,21 @@
 # sharemask
 
-A personal macOS menu-bar app that lets you share your screen in any video-call app (Zoom, Meet,
-Teams, Slack, FaceTime) while chosen regions of chosen apps are pixellated **only on the shared
-feed**. Your own display is never touched.
+**Share your screen without sharing your chats.** sharemask is a macOS menu-bar app that lets you
+screen-share in Zoom, Meet, Teams, Slack or FaceTime while the parts you choose (the WhatsApp chat
+list, a Slack sidebar, every notification banner, or everything except the one app you're
+presenting) are pixellated **only on the shared feed**. Your own screen stays exactly as it is.
+
+- Pixellate, blur or black out regions of any app — drawn with an overlay editor (rectangles,
+  squares, circles) directly over the window.
+- Masks follow windows as they move and resize, and respect whatever overlaps them.
+- **Allowlist mode**: mask the entire screen except the apps you name.
+- **Hold a key to reveal** an app for a moment, or untick a single mask, without stopping the share.
+- **Panic key** blacks out the whole feed on the next frame.
+- Captures only while you're in a meeting (microphone in use or a share in progress), so macOS's
+  recording indicator isn't on all day.
+- Fails closed: if capture stalls, viewers see black, not a stale frame, and one key removes the
+  shared display to end the share outright.
+- A "what others see" preview window, and persistent logs for when something looks off.
 
 macOS 14+ (built and measured on macOS 27.0.1), Apple Silicon, Swift 5.9+/SwiftPM. Not sandboxed,
 not notarised, uses private CoreGraphics API. Single user, single machine.
@@ -60,6 +73,11 @@ Menu bar icon: grey = stopped, green = proxy active, red = PANIC, yellow = error
 |---|---|---|
 | Panic | ⌘⇧⌃B | Pixellates the **whole** feed on the next frame (≤ 17 ms). Press again to restore. |
 | Regions: enabled/disabled | ⌘⇧⌃M | Turns per-app regions on/off (panic unaffected). |
+| Hold to reveal | ⌘⇧⌃R (hold) | Shows the frontmost app unmasked while the key is held. |
+| Allowlist mode | ⌘⇧⌃A | Masks everything except the `allowlist` apps. |
+| End share now | ⌘⇧⌃X | Removes the “sharemask” display, which ends the share in your call app. |
+| Masks ▸ | | Tick/untick individual apps, regions, rules and notification masking for this session. |
+| Show “what others see” preview | | Small floating window with the live proxy output (never captured). |
 | Pick region for frontmost app… | ⌘⇧⌃P | Opens the **region editor** over the frontmost window. |
 | Pick regions for app ▸ | | Same editor for any running app. |
 | Configured apps ▸ | | Edit or remove the regions of each app in presets.json. |
@@ -125,6 +143,10 @@ Launch flags: `--demo` adds a hard-coded pixellate rect at (100,100,400,300) px 
 }
 ```
 
+- `rules`: `[{ "name": "wa-web", "titleContains": "WhatsApp", "bundleID": "optional", "regions": [...] }]`
+  matches any window by title substring (web apps in a browser) and/or bundle ID.
+- `allowlist`: bundle IDs that stay visible in allowlist mode, e.g. `["com.apple.Keynote"]`.
+- `maskNotifications` (default true): black out macOS notification banners.
 - `rect` is `[x, y, w, h]` normalised to the window frame, origin top-left; `"shape": "ellipse"`
   makes it an ellipse inside that box (kept only while nothing overlaps it, otherwise it falls back
   to rectangles — over-redaction, never under).
@@ -193,7 +215,22 @@ Measured on an M-series MacBook at 2940×1912 (macOS 27.0.1): capture→present 
 pipeline 2.6 ms, GPU 1.3–1.5 ms. The fps figure follows screen activity: ScreenCaptureKit only
 delivers frames when content changes, so a static desktop reads ~8–10 fps and rises to 60 under motion.
 
+## Install via Homebrew (once a release exists)
+
+```sh
+brew tap Larry8668/sharemask
+brew install --cask --no-quarantine sharemask
+```
+
+The cask lives in `packaging/`; see `packaging/RELEASING.md`.
+
+## Other platforms
+
+The resolver is also a platform-independent Rust crate (`core/`, `cargo test`), and
+[`docs/PORTING.md`](docs/PORTING.md) lays out what a Windows (IddCx + Windows.Graphics.Capture)
+and Linux (PipeWire + headless output) port needs. Only macOS is implemented.
+
 ## Non-goals
 
 No virtual camera, no browser extension, no OCR/ML detection (geometric presets only), no
-per-window compositing, no App Store/notarisation, no Windows/Linux (yet).
+per-window compositing, no App Store/notarisation.
