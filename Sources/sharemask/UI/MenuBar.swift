@@ -18,6 +18,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         var endShare: () -> Void
         var dumpWindows: () -> Void
         var changeHotkey: (String) -> Void        // hotkey name in presets.json
+        var toggleLoginItem: () -> Void
         var openPresets: () -> Void
         var openLogs: () -> Void
         var reloadPresets: () -> Void
@@ -43,6 +44,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let previewItem = NSMenuItem()
     private let endShareItem = NSMenuItem()
     private let hotkeysItem = NSMenuItem()
+    private let loginItem = NSMenuItem()
     private let pointerItem = NSMenuItem()
     private let hudItem = NSMenuItem()
     private let statusLine = NSMenuItem()
@@ -125,6 +127,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
         hotkeysItem.title = "Shortcuts"
         hotkeysItem.submenu = NSMenu()
         menu.addItem(hotkeysItem)
+        loginItem.title = "Launch at login"
+        bind(loginItem, #selector(toggleLoginItem))
+        menu.addItem(loginItem)
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit sharemask", action: #selector(quit), keyEquivalent: "q").target = self
         item.menu = menu
@@ -153,7 +158,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
     func update(status: String, latency: String, warning: String?, running: Bool, panic: Bool,
                 regionsEnabled: Bool, pointerGuard: Bool, hud: Bool, hotkeys: HotkeyConfig, needsPermission: Bool,
-                needsRelaunch: Bool, allowlistMode: Bool, previewShown: Bool) {
+                needsRelaunch: Bool, allowlistMode: Bool, previewShown: Bool, launchAtLogin: Bool) {
+        loginItem.state = launchAtLogin ? .on : .off
         relaunchItem.isHidden = !needsRelaunch
         allowlistItem.state = allowlistMode ? .on : .off
         MenuBar.setKey(allowlistItem, hotkeys.allowlist)
@@ -241,6 +247,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
         hint.isEnabled = false
         m.addItem(hint)
     }
+
+    @objc private func toggleLoginItem() { actions.toggleLoginItem() }
 
     @objc private func changeHotkey(_ sender: NSMenuItem) {
         if let key = sender.representedObject as? String { actions.changeHotkey(key) }

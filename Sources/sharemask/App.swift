@@ -1,5 +1,6 @@
 import AppKit
 import Carbon
+import ServiceManagement
 
 @main
 enum Main {
@@ -95,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             endShare: { [weak self] in self?.endShare(confirm: true) },
             dumpWindows: { [weak self] in self?.dumpWindows() },
             changeHotkey: { [weak self] name in self?.changeHotkey(name) },
+            toggleLoginItem: { [weak self] in self?.toggleLoginItem() },
             openPresets: { NSWorkspace.shared.open(ConfigStore.fileURL) },
             openLogs: { NSWorkspace.shared.activateFileViewerSelecting([Log.fileURL]) },
             reloadPresets: { [weak self] in self?.config.reload() },
@@ -294,6 +296,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     onPrimary: { [weak self] in self?.endShare(confirm: false) }, onSecondary: {})
     }
 
+    /// Login item via SMAppService (macOS 13+). Registers THIS bundle's path, so do it from the
+    /// installed copy (/Applications), not from build/.
+    private var launchAtLogin: Bool { SMAppService.mainApp.status == .enabled }
+
+    private func toggleLoginItem() {
+        do {
+            if launchAtLogin { try SMAppService.mainApp.unregister() } else { try SMAppService.mainApp.register() }
+            Log.info("launch at login \(launchAtLogin ? "enabled" : "disabled") for \(Bundle.main.bundlePath)")
+        } catch {
+            alert("Could not change login item", "\(error.localizedDescription)\n\nmacOS may require approval under System Settings → General → Login Items.")
+        }
+        refreshMenu()
+    }
+
     private func changeHotkey(_ name: String) {
         let hk = config.config.hotkeys
         let current: String? = ["panic": hk.panic, "toggle": hk.toggle, "pick": hk.pick, "reveal": hk.reveal,
@@ -423,7 +439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                        regionsEnabled: regions, pointerGuard: pointerGuardEnabled, hud: hudEnabled,
                        hotkeys: config.config.hotkeys, needsPermission: permissionMissing,
                        needsRelaunch: pipeline?.needsRelaunch ?? false, allowlistMode: options.allowlistMode,
-                       previewShown: preview.isVisible)
+                       previewShown: preview.isVisible, launchAtLogin: launchAtLogin)
     }
 
     /// Quit and start a fresh instance (needed after Screen Recording is granted to a running app).

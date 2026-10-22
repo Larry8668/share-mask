@@ -108,6 +108,7 @@ Menu bar icon: grey = stopped, green = proxy active, red = PANIC, yellow = error
 | Start/Stop capturing | | Forces capture on/off (the virtual display stays until quit). |
 | Show log file | | Reveals `~/Library/Logs/sharemask/sharemask.log`. |
 | Shortcuts ▸ | | Remap any shortcut: pick it, press the new keys. Stored in presets.json. |
+| Launch at login | | Registers the app as a login item (use it from the installed copy in Applications). |
 | Open presets.json / Reload | | Config lives at `~/.config/sharemask/presets.json`, live-reloaded. |
 | Pointer guard | | Warps the cursor back if it wanders onto the virtual display (default on). |
 | Show status HUD | | Small "● sharing-safe / PANIC" panel on your real display; never captured. |
