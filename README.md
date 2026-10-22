@@ -60,11 +60,40 @@ Menu bar icon: grey = stopped, green = proxy active, red = PANIC, yellow = error
 |---|---|---|
 | Panic | ⌘⇧⌃B | Pixellates the **whole** feed on the next frame (≤ 17 ms). Press again to restore. |
 | Regions: enabled/disabled | ⌘⇧⌃M | Turns per-app regions on/off (panic unaffected). |
-| Pick region for frontmost app… | ⌘⇧⌃P | Drag rectangles on a frozen screenshot of the frontmost window; saved to presets. |
-| Start/Stop proxy display | | Starts/stops capture (the virtual display stays until quit). |
+| Pick region for frontmost app… | ⌘⇧⌃P | Opens the **region editor** over the frontmost window. |
+| Pick regions for app ▸ | | Same editor for any running app. |
+| Configured apps ▸ | | Edit or remove the regions of each app in presets.json. |
+| Start/Stop capturing | | Forces capture on/off (the virtual display stays until quit). |
+| Show log file | | Reveals `~/Library/Logs/sharemask/sharemask.log`. |
 | Open presets.json / Reload | | Config lives at `~/.config/sharemask/presets.json`, live-reloaded. |
 | Pointer guard | | Warps the cursor back if it wanders onto the virtual display (default on). |
 | Show status HUD | | Small "● sharing-safe / PANIC" panel on your real display; never captured. |
+
+### Region editor
+A transparent overlay sits exactly over the app's window (and follows it if it moves). Drag on
+empty space to draw a **rectangle, square or circle**; drag a shape to move it; drag its handles to
+resize; arrow keys nudge; Delete removes; Esc cancels; Enter saves. Each shape shows the actual
+pixellation preview, and the toolbar sets its mode (pixellate / blur / black) or drops in a
+template (left/right sidebar, top bar, whole window, centre circle). Regions are stored
+normalised to the window, so they keep fitting when the window is resized.
+
+### Capture only during meetings
+macOS shows its purple "recording" indicator whenever sharemask captures, and that cannot be
+hidden. By default (`"capture": "ask"`) sharemask therefore stays in **standby** and only captures
+when a meeting is detected:
+
+- **microphone in use** (CoreAudio "device is running somewhere", no permission needed; the app
+  using it is named on macOS 14.2+), or
+- **another app is capturing the screen** (private `CGSIsScreenWatcherPresent`, checked while our
+  own capture is off), or
+- optionally (`"calendarLookahead": true`, asks for Calendar access) an event with attendees or a
+  video-call link starting within 5 minutes.
+
+A floating prompt asks "Meeting detected — start sharemask proxy?"; `"capture": "auto"` starts
+without asking. When the mic goes quiet for 15 s sharemask pauses capture for half a second to
+check that nobody else is still capturing, then stops and says so. `"always"` captures whenever the
+proxy is running; `"manual"` only via the menu. The virtual display itself always exists while
+the app runs, so the "sharemask" display is always there to pick in Zoom/Meet.
 
 Launch flags: `--demo` adds a hard-coded pixellate rect at (100,100,400,300) px for testing;
 `--probe` runs the display diagnostics CLI.
@@ -96,12 +125,13 @@ Launch flags: `--demo` adds a hard-coded pixellate rect at (100,100,400,300) px 
 }
 ```
 
-- `rect` is `[x, y, w, h]` normalised to the window frame, origin top-left.
+- `rect` is `[x, y, w, h]` normalised to the window frame, origin top-left; `"shape": "ellipse"`
+  makes it an ellipse inside that box (kept only while nothing overlaps it, otherwise it falls back
+  to rectangles — over-redaction, never under).
 - Modes: `pixellate {scale}`, `blur {radius}`, `solid {color}`. Unknown bundle IDs are ignored.
 - A malformed file keeps the last good config and shows a warning in the menu.
-- `idleMode` (optional): only capture while some process has a screen-recording session open,
-  detected with the private `CGSIsScreenWatcherPresent`. Because sharemask's own stream counts as a
-  watcher, the check pauses capture for ~0.5 s every 2 minutes. Off by default.
+- `capture`: `ask` (default) · `auto` · `always` · `manual` — see "Capture only during meetings".
+- `calendarLookahead`: prompt before calendar meetings (needs Calendar access). Off by default.
 
 Occlusion is respected: if another window overlaps a masked region, the overlapping part is left
 sharp (a Terminal dragged over WhatsApp stays readable). Windows that are themselves hidden from
@@ -147,6 +177,12 @@ Encoded in `VirtualDisplay.swift`; measured on macOS 27.0.1 with `make probe`:
 7. Created at the real display's pixel size with a ~110 DPI physical size, so macOS enters the
    native 1× mode. With a Retina-like DPI it would come up at half size. Note that
    `CGDisplayPixelsWide` returns *points* on Retina displays; the pixel size is read from the mode.
+
+## Logs
+
+Everything goes to `~/Library/Logs/sharemask/sharemask.log` (rotated at 5 MB), to the unified log
+(subsystem `dev.sharemask.app`, notice level) and to stderr when run from a terminal. Crashes write
+a final `[FATAL]` line; macOS crash reports are in `~/Library/Logs/DiagnosticReports`.
 
 ## Performance
 

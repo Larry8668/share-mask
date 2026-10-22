@@ -4,3 +4,4 @@ build/
 .DS_Store
 .swiftpm/
 *.dSYM
+docs/internal/

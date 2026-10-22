@@ -32,6 +32,8 @@ let package = Package(
                 .linkedFramework("Carbon"),
                 .linkedFramework("CoreMedia"),
                 .linkedFramework("CoreVideo"),
+                .linkedFramework("CoreAudio"),
+                .linkedFramework("EventKit"),
             ]
         ),
         .testTarget(

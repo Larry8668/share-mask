@@ -10,7 +10,7 @@ import CGSPrivate
 final class Pipeline {
     enum State: Equatable {
         case idle, starting, running, stopped
-        /// Idle mode: capture paused because no process is recording the screen.
+        /// Auto mode: capture paused because no meeting/share is detected.
         case waitingForWatcher
         case error(String)
         var isRunning: Bool { self == .running }
@@ -45,13 +45,17 @@ final class Pipeline {
     private var rerenderTimer: DispatchSourceTimer?
     private var restartAttempts = 0
     private var idleTimer: DispatchSourceTimer?
-    /// Idle mode (optional, off by default): only capture while some process has a screen-capture
-    /// session open (Zoom/Meet/...), detected with the private CGSIsScreenWatcherPresent(). Our own
-    /// stream counts as a watcher, so the check is made with capture paused: at start, and then
-    /// every `idleCheckInterval` seconds (a ~0.5 s freeze of the proxy feed each time).
-    var idleMode = false { didSet { if idleMode != oldValue { DispatchQueue.main.async { self.idleModeChanged() } } } }
-    var idleCheckInterval: TimeInterval = 120
-    static var idleModeSupported: Bool { SMScreenWatcherAPIAvailable() }
+
+    enum CaptureMode: String { case ask, auto, always, manual }
+    /// `ask` (default) / `auto`: capture only while a meeting is detected (`meetingActive`, driven
+    /// by MeetingCoordinator from the microphone signal + screen-watcher checks, with or without a
+    /// prompt), so macOS's recording indicator is only on during calls. `always`: capture whenever
+    /// started. `manual`: same as always (the user starts/stops from the menu).
+    var captureMode: CaptureMode = .ask { didSet { if captureMode != oldValue { DispatchQueue.main.async { self.gateChanged() } } } }
+    /// Set by the App's meeting detection. Only consulted in `.auto`.
+    var meetingActive = false { didSet { if meetingActive != oldValue { DispatchQueue.main.async { self.gateChanged() } } } }
+    private var captureWanted: Bool { (captureMode != .auto && captureMode != .ask) || meetingActive }
+    static var watcherAPIAvailable: Bool { SMScreenWatcherAPIAvailable() }
     private var reconfigToken: CGDisplayReconfigurationCallBack?
 
     var config: PresetConfig {
@@ -96,70 +100,55 @@ final class Pipeline {
         tracker.start()
         installReconfigurationCallback()
         startRerenderTimer()
-        if idleMode, Pipeline.idleModeSupported, !SMScreenWatcherPresent() {
-            enterWaitingForWatcher()
-        } else {
+        if captureWanted {
             Task { await startCapture() }
+        } else {
+            enterWaitingForMeeting()
         }
     }
 
-    // MARK: Idle mode
+    // MARK: Auto capture gate
 
-    private func idleModeChanged() {
-        idleTimer?.cancel(); idleTimer = nil
+    private func gateChanged() {
         switch state {
-        case .waitingForWatcher where !idleMode:
+        case .waitingForWatcher where captureWanted:
             state = .starting
             Task { await startCapture() }
-        case .running where idleMode:
-            scheduleIdleCheck()
+        case .running where !captureWanted, .starting where !captureWanted:
+            let cap = capture
+            capture = nil
+            Task { await cap?.stop() }
+            lock.lock(); lastFrame = nil; pending = nil; lock.unlock()
+            enterWaitingForMeeting()
         default: break
         }
     }
 
-    private func enterWaitingForWatcher() {
+    private func enterWaitingForMeeting() {
         state = .waitingForWatcher
         presentBlack()
-        idleTimer?.cancel()
-        let t = DispatchSource.makeTimerSource(queue: .main)
-        t.schedule(deadline: .now() + 1, repeating: 1)
-        t.setEventHandler { [weak self] in
-            guard let self = self, self.state == .waitingForWatcher else { return }
-            if !self.idleMode || SMScreenWatcherPresent() {
-                self.idleTimer?.cancel(); self.idleTimer = nil
-                self.state = .starting
-                Task { await self.startCapture() }
-            }
-        }
-        t.resume()
-        idleTimer = t
+        Log.info("auto capture: waiting for a meeting (capture off)")
     }
 
-    private func scheduleIdleCheck() {
-        guard idleMode, Pipeline.idleModeSupported else { return }
-        idleTimer?.cancel()
-        let t = DispatchSource.makeTimerSource(queue: .main)
-        t.schedule(deadline: .now() + idleCheckInterval)
-        t.setEventHandler { [weak self] in self?.runIdleCheck() }
-        t.resume()
-        idleTimer = t
+    /// Only valid while capture is OFF (our own stream would count): is any process recording the
+    /// screen right now? Used by the App to start capture when a share begins without a mic.
+    var someoneElseIsCapturing: Bool {
+        guard capture == nil, Pipeline.watcherAPIAvailable else { return false }
+        return SMScreenWatcherPresent()
     }
 
-    private func runIdleCheck() {
-        guard idleMode, state == .running, let cap = capture else { return }
+    /// Pauses capture for ~0.5 s to check whether another process is capturing the screen.
+    /// Completion on the main thread.
+    func probeOtherWatchers(_ completion: @escaping (Bool) -> Void) {
+        guard state == .running, let cap = capture, Pipeline.watcherAPIAvailable else { completion(false); return }
         capture = nil
         Task {
             await cap.stop()
             try? await Task.sleep(nanoseconds: 400_000_000)
             let watched = SMScreenWatcherPresent()
             await MainActor.run {
-                guard self.state == .running else { return }
-                if watched {
-                    Task { await self.startCapture() }
-                } else {
-                    Log.info("idle mode: nobody is capturing the screen, pausing")
-                    self.enterWaitingForWatcher()
-                }
+                if self.state == .running { Task { await self.startCapture() } }
+                completion(watched)
             }
         }
     }
@@ -180,7 +169,7 @@ final class Pipeline {
             try await cap.start { [weak self] buffer, pts in self?.ingest(buffer, pts) }
             capture = cap
             restartAttempts = 0
-            DispatchQueue.main.async { self.state = .running; self.scheduleIdleCheck() }
+            DispatchQueue.main.async { self.state = .running }
         } catch {
             DispatchQueue.main.async {
                 self.state = .error("\(error)")

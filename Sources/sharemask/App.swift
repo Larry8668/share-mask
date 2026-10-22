@@ -5,6 +5,7 @@ import Carbon
 enum Main {
     static func main() {
         let args = Array(CommandLine.arguments.dropFirst())
+        Log.start(role: args.first == "--probe" ? "probe" : "app")
         if args.first == "--probe" {
             exit(Probe.run(arguments: Array(args.dropFirst())))
         }
@@ -63,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hud = StatusHUD()
     private var pointerGuard: PointerGuard?
     private var picker: RegionPicker?
+    private var meetings: MeetingCoordinator?
     private var refreshTimer: Timer?
     private var permissionMissing = false
     private var pointerGuardEnabled = true
@@ -79,7 +81,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panic: { [weak self] in self?.togglePanic() },
             toggleRegions: { [weak self] in self?.toggleRegions() },
             pick: { [weak self] in self?.pickRegion() },
+            pickFor: { [weak self] pid, bundleID in self?.pickRegion(pid: pid, bundleID: bundleID) },
+            removeApp: { [weak self] bundleID in
+                do { try self?.config.removeApp(bundleID: bundleID) } catch { self?.alert("Could not update presets.json", "\(error)") }
+            },
             openPresets: { NSWorkspace.shared.open(ConfigStore.fileURL) },
+            openLogs: { NSWorkspace.shared.activateFileViewerSelecting([Log.fileURL]) },
             reloadPresets: { [weak self] in self?.config.reload() },
             togglePointerGuard: { [weak self] in self?.togglePointerGuard() },
             toggleHUD: { [weak self] in self?.toggleHUD() },
@@ -88,7 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             relaunch: { [weak self] in self?.relaunch() },
             quit: { NSApp.terminate(nil) }))
-        menuBar.onMenuWillOpen = { [weak self] in self?.refreshMenu() }
+        menuBar.onMenuWillOpen = { [weak self] in self?.refreshMenu(); self?.refreshAppMenus() }
 
         config.onChange = { [weak self] cfg in self?.applyConfig(cfg) }
         config.onError = { [weak self] _ in self?.refreshMenu() }
@@ -102,18 +109,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let vd = launch.virtualDisplay else { return }
         let p = Pipeline(virtualDisplay: vd, source: launch.source, tracker: tracker)
         p.config = config.config
-        p.idleMode = config.config.idleMode
+        p.captureMode = Pipeline.CaptureMode(rawValue: config.config.captureMode) ?? .ask
+        let mc = MeetingCoordinator(pipeline: p)
+        mc.mode = p.captureMode
+        mc.calendarLookahead = config.config.calendarLookahead
+        mc.onStatus = { [weak self] _ in self?.refreshMenu() }
+        meetings = mc
         if demo { p.setDemoRegions([CGRect(x: 100, y: 100, width: 400, height: 300)]) }
         p.onStateChange = { [weak self] _ in self?.refreshMenu() }
         pipeline = p
         pointerGuard = PointerGuard(virtualDisplayID: vd.displayID, sourceDisplayID: launch.source.id)
         p.start()
+        meetings?.start()
 
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refreshMenu() }
         refreshMenu()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        meetings?.stop()
         hotkeys.unregisterAll()
         pipeline?.stop()
         if let vd = launch.virtualDisplay {
@@ -128,7 +142,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func applyConfig(_ cfg: PresetConfig) {
         pipeline?.config = cfg
-        pipeline?.idleMode = cfg.idleMode
+        let mode = Pipeline.CaptureMode(rawValue: cfg.captureMode) ?? .ask
+        pipeline?.captureMode = mode
+        meetings?.mode = mode
+        meetings?.calendarLookahead = cfg.calendarLookahead
         hotkeys.set(.panic, combo: cfg.hotkeys.panic) { [weak self] in DispatchQueue.main.async { self?.togglePanic() } }
         hotkeys.set(.toggle, combo: cfg.hotkeys.toggle) { [weak self] in DispatchQueue.main.async { self?.toggleRegions() } }
         hotkeys.set(.pick, combo: cfg.hotkeys.pick) { [weak self] in DispatchQueue.main.async { self?.pickRegion() } }
@@ -143,7 +160,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func toggleProxy() {
         guard let p = pipeline else { return }
-        if p.state.isRunning || p.state == .starting || p.state == .waitingForWatcher { p.stop() } else { p.start() }
+        if p.captureMode == .ask || p.captureMode == .auto {
+            // Start/Stop means "capture now" / "stop capturing"; the proxy display itself stays.
+            if p.state.isRunning || p.state == .starting { meetings?.userStoppedManually() }
+            else if p.state == .waitingForWatcher { meetings?.userStartedManually() }
+            else { p.start(); meetings?.userStartedManually() }
+        } else {
+            if p.state.isRunning || p.state == .starting || p.state == .waitingForWatcher { p.stop() } else { p.start() }
+        }
         updateHUD()
     }
 
@@ -164,15 +188,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func pickRegion() {
-        guard picker == nil else { picker?.bringToFront(); return }
         let front = NSWorkspace.shared.frontmostApplication
-        let bundleID = front?.bundleIdentifier ?? ""
-        let picker = RegionPicker(bundleID: bundleID, pid: front?.processIdentifier ?? 0,
+        pickRegion(pid: front?.processIdentifier ?? 0, bundleID: front?.bundleIdentifier ?? "")
+    }
+
+    private func pickRegion(pid: pid_t, bundleID: String) {
+        guard picker == nil else { picker?.bringToFront(); return }
+        let picker = RegionPicker(bundleID: bundleID, pid: pid,
                                   existing: config.config.apps[bundleID]?.regions ?? [])
-        picker.onSave = { [weak self] bundleID, regions, replace in
+        picker.onSave = { [weak self] bundleID, regions in
             guard let self = self else { return }
             do {
-                try self.config.addRegions(bundleID: bundleID, regions: regions, replace: replace)
+                try self.config.addRegions(bundleID: bundleID, regions: regions, replace: true)
                 Log.info("saved \(regions.count) region(s) for \(bundleID)")
             } catch {
                 self.alert("Could not save presets.json", "\(error)")
@@ -200,6 +227,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { hud.set(.safe) }
     }
 
+    /// Running GUI apps (for "Pick regions for app") and apps present in presets.json.
+    private func refreshAppMenus() {
+        let me = Bundle.main.bundleIdentifier
+        let running = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular && $0.bundleIdentifier != nil && $0.bundleIdentifier != me && !$0.isTerminated }
+            .map { MenuBar.RunningApp(name: $0.localizedName ?? $0.bundleIdentifier!, pid: $0.processIdentifier, bundleID: $0.bundleIdentifier!) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let configured = config.config.apps.map { (bundleID, app) -> MenuBar.ConfiguredApp in
+            let proc = running.first { $0.bundleID == bundleID }
+            let name = proc?.name ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+                .flatMap { Bundle(url: $0)?.infoDictionary?["CFBundleName"] as? String } ?? bundleID
+            return MenuBar.ConfiguredApp(name: name, bundleID: bundleID, regionCount: app.regions.count, pid: proc?.pid)
+        }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        menuBar.updateApps(running: running, configured: configured)
+    }
+
     // MARK: Menu refresh
 
     private func refreshMenu() {
@@ -222,7 +265,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch p.state {
             case .idle, .stopped: status = "Proxy display: created, capture stopped"; menuBar.setIcon(.idle)
             case .starting: status = "Proxy display: starting…"; menuBar.setIcon(.idle)
-            case .waitingForWatcher: status = "Idle: waiting for a screen share to begin"; menuBar.setIcon(.idle)
+            case .waitingForWatcher: status = "Standby — \(meetings?.statusText ?? "capture off") · click Start to capture now"; menuBar.setIcon(.idle)
             case .running:
                 status = "Sharing-safe: share display “sharemask” (\(Int(out.width))×\(Int(out.height)))"
                 menuBar.setIcon(panic ? .panic : .active)
@@ -239,6 +282,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 warning = (warning.map { $0 + " · " } ?? "") + "virtual display mode was changed; teardown requires relaunch"
             }
             if p.panic && p.state.isRunning { status = "PANIC — whole feed redacted" }
+            if p.state.isRunning, let m = meetings { latency += "\n" + m.statusText }
         }
 
         menuBar.update(status: status, latency: latency, warning: warning, running: running, panic: panic,

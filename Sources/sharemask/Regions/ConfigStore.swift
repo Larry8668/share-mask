@@ -112,7 +112,9 @@ final class ConfigStore {
 
     /// Merges regions into the app's entry, preserving everything else in the file verbatim-ish
     /// (round-trips through JSONSerialization so unknown keys survive).
-    func addRegions(bundleID: String, regions: [(name: String, rect: CGRect)], replace: Bool) throws {
+    struct NewRegion { var name: String; var rect: CGRect; var mode: String?; var shape: String? }
+
+    func addRegions(bundleID: String, regions: [NewRegion], replace: Bool) throws {
         var root: [String: Any] = [:]
         if let data = try? Data(contentsOf: ConfigStore.fileURL),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -123,13 +125,26 @@ final class ConfigStore {
         var app = apps[bundleID] as? [String: Any] ?? [:]
         var list = replace ? [] : (app["regions"] as? [[String: Any]] ?? [])
         for r in regions {
-            list.append(["name": r.name, "rect": [round4(r.rect.minX), round4(r.rect.minY), round4(r.rect.width), round4(r.rect.height)]])
+            var entry: [String: Any] = ["name": r.name, "rect": [round4(r.rect.minX), round4(r.rect.minY), round4(r.rect.width), round4(r.rect.height)]]
+            if let mode = r.mode, mode != "pixellate" { entry["mode"] = mode }
+            if let shape = r.shape, shape != "rect" { entry["shape"] = shape }
+            list.append(entry)
         }
         app["regions"] = list
         apps[bundleID] = app
         root["apps"] = apps
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: ConfigStore.fileURL, options: .atomic)
+    }
+
+    func removeApp(bundleID: String) throws {
+        guard let data = try? Data(contentsOf: ConfigStore.fileURL),
+              var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              var apps = root["apps"] as? [String: Any] else { return }
+        apps.removeValue(forKey: bundleID)
+        root["apps"] = apps
+        let out = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        try out.write(to: ConfigStore.fileURL, options: .atomic)
     }
 
     private func round4(_ v: CGFloat) -> Double { (Double(v) * 10000).rounded() / 10000 }
@@ -155,7 +170,8 @@ final class ConfigStore {
       "hotkeys": { "panic": "cmd+shift+ctrl+B", "toggle": "cmd+shift+ctrl+M", "pick": "cmd+shift+ctrl+P" },
       "pointerGuard": true,
       "hud": false,
-      "idleMode": false
+      "capture": "ask",
+      "calendarLookahead": false
     }
     """
 }

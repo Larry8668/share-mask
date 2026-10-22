@@ -22,5 +22,6 @@
   },
   "pointerGuard": true,
   "hud": false,
-  "idleMode": false
+  "capture": "ask",
+  "calendarLookahead": false
 }

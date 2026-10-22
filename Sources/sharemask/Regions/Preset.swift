@@ -31,11 +31,14 @@ struct RGBA: Equatable {
     init(r: Double, g: Double, b: Double, a: Double) { self.r = r; self.g = g; self.b = b; self.a = a }
 }
 
+enum RegionShape: String, Equatable { case rect, ellipse }
+
 /// A region of a window, in window-normalised coordinates [0,1], origin top-left.
 struct PresetRegion: Equatable {
     var name: String
-    var rect: CGRect        // x, y, w, h normalised to the window frame
+    var rect: CGRect        // x, y, w, h normalised to the window frame (bounding box for ellipses)
     var mode: RedactMode
+    var shape: RegionShape = .rect
 }
 
 struct AppPreset: Equatable {
@@ -57,13 +60,17 @@ struct PresetConfig: Equatable {
     var hotkeys: HotkeyConfig
     var pointerGuard: Bool
     var hud: Bool
-    var idleMode: Bool
+    /// "ask" (default): detect meetings and ask before capturing · "auto": start/stop silently ·
+    /// "always": capture whenever the proxy is started · "manual": only via the menu.
+    var captureMode: String
+    /// Look at upcoming calendar events (needs Calendar access) to prompt before a meeting starts.
+    var calendarLookahead: Bool
 
     static let empty = PresetConfig(version: 1, defaultMode: .defaultPixellate, apps: [:],
                                     hotkeys: HotkeyConfig(panic: "cmd+shift+ctrl+B",
                                                           toggle: "cmd+shift+ctrl+M",
                                                           pick: "cmd+shift+ctrl+P"),
-                                    pointerGuard: true, hud: false, idleMode: false)
+                                    pointerGuard: true, hud: false, captureMode: "ask", calendarLookahead: false)
 }
 
 // MARK: - JSON (de)serialisation
@@ -84,6 +91,7 @@ struct PresetFile: Codable {
         var scale: Int?
         var radius: Float?
         var color: String?
+        var shape: String?
     }
     struct App: Codable {
         var regions: [Region]
@@ -100,7 +108,9 @@ struct PresetFile: Codable {
     var hotkeys: Hotkeys?
     var pointerGuard: Bool?
     var hud: Bool?
-    var idleMode: Bool?
+    var idleMode: Bool?          // legacy alias: true → capture "auto"
+    var capture: String?
+    var calendarLookahead: Bool?
 }
 
 enum PresetError: Error, CustomStringConvertible {
@@ -146,7 +156,8 @@ extension PresetConfig {
                 let m = try mode(name: r.mode ?? d?.mode ?? "pixellate",
                                  scale: r.scale ?? d?.scale, radius: r.radius ?? d?.radius,
                                  color: r.color ?? d?.color, fallback: defaultMode)
-                regions.append(PresetRegion(name: name, rect: rect.clamped01, mode: m))
+                let shape = RegionShape(rawValue: (r.shape ?? "rect").lowercased()) ?? .rect
+                regions.append(PresetRegion(name: name, rect: rect.clamped01, mode: m, shape: shape))
             }
             apps[bundleID] = AppPreset(regions: regions, whenFrontmostOnly: app.whenFrontmostOnly ?? false)
         }
@@ -156,7 +167,13 @@ extension PresetConfig {
                               pick: file.hotkeys?.pick ?? PresetConfig.empty.hotkeys.pick)
         return PresetConfig(version: version, defaultMode: defaultMode, apps: apps, hotkeys: hk,
                             pointerGuard: file.pointerGuard ?? true, hud: file.hud ?? false,
-                            idleMode: file.idleMode ?? false)
+                            captureMode: captureMode(file), calendarLookahead: file.calendarLookahead ?? false)
+    }
+
+    private static func captureMode(_ file: PresetFile) -> String {
+        if let c = file.capture?.lowercased(), ["ask", "auto", "always", "manual"].contains(c) { return c }
+        if file.idleMode == true { return "auto" }
+        return "ask"
     }
 
     private static func mode(name: String, scale: Int?, radius: Float?, color: String?,

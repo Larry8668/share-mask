@@ -67,9 +67,42 @@ final class Redactor: FrameProcessor {
             case .solid(let c):
                 patch = CIImage(color: CIColor(red: c.r, green: c.g, blue: c.b, alpha: 1)).cropped(to: rect)
             }
-            acc = patch.composited(over: acc)
+            if region.shape == .ellipse {
+                let mask = ellipseMask(for: rect)
+                let blend = CIFilter.blendWithMask()
+                blend.inputImage = patch
+                blend.backgroundImage = acc
+                blend.maskImage = mask
+                acc = blend.outputImage ?? patch.composited(over: acc)
+            } else {
+                acc = patch.composited(over: acc)
+            }
         }
         return acc.cropped(to: frame)
+    }
+
+    private var maskCache: [String: CIImage] = [:]
+
+    /// White ellipse on transparent, positioned at `rect` in frame coordinates. Cached per rect.
+    private func ellipseMask(for rect: CGRect) -> CIImage {
+        let key = "\(Int(rect.minX)),\(Int(rect.minY)),\(Int(rect.width)),\(Int(rect.height))"
+        lock.lock(); defer { lock.unlock() }
+        if let m = maskCache[key] { return m }
+        if maskCache.count > 64 { maskCache.removeAll() }
+        let w = max(1, Int(rect.width)), h = max(1, Int(rect.height))
+        let cs = CGColorSpaceCreateDeviceGray()
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                                  space: cs, bitmapInfo: CGImageAlphaInfo.none.rawValue) else {
+            return CIImage(color: .white).cropped(to: rect)
+        }
+        ctx.setFillColor(gray: 0, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.setFillColor(gray: 1, alpha: 1)
+        ctx.fillEllipse(in: CGRect(x: 0, y: 0, width: w, height: h))
+        guard let cg = ctx.makeImage() else { return CIImage(color: .white).cropped(to: rect) }
+        let img = CIImage(cgImage: cg).transformed(by: CGAffineTransform(translationX: rect.minX, y: rect.minY))
+        maskCache[key] = img
+        return img
     }
 
     /// Pixellates `rect` of `image`; block grid anchored to the rect origin so blocks align to it,

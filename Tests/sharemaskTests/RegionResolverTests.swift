@@ -148,3 +148,38 @@ final class RegionResolverTests: XCTestCase {
         XCTAssertTrue(RegionResolver.subtract(a.insetBy(dx: -1, dy: -1), from: a).isEmpty)
     }
 }
+
+final class EllipseTests: XCTestCase {
+    let display = DisplayGeometry(boundsPoints: CGRect(x: 0, y: 0, width: 1000, height: 1000), scale: 1, pixelSize: CGSize(width: 1000, height: 1000))
+    let app = "a.b"
+    func cfg() -> PresetConfig {
+        var c = PresetConfig.empty
+        c.apps[app] = AppPreset(regions: [PresetRegion(name: "c", rect: CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5), mode: .defaultPixellate, shape: .ellipse)], whenFrontmostOnly: false)
+        return c
+    }
+    func w(_ id: UInt32, _ b: String?, _ r: CGRect) -> TrackedWindow {
+        TrackedWindow(windowID: id, pid: 1, bundleID: b, boundsPoints: r, layer: 0, alpha: 1, sharingState: 1)
+    }
+    func testUnoccludedEllipseStaysEllipse() {
+        let out = RegionResolver.resolve(presets: cfg(), windows: [w(1, app, CGRect(x: 0, y: 0, width: 400, height: 400))], display: display, frontmostBundleID: nil)
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].shape, .ellipse)
+        XCTAssertEqual(out[0].rect, CGRect(x: 100, y: 1000 - 300, width: 200, height: 200))
+    }
+    func testOccludedEllipseFallsBackToRects() {
+        let occ = w(2, "x", CGRect(x: 150, y: 150, width: 50, height: 50))
+        let out = RegionResolver.resolve(presets: cfg(), windows: [occ, w(1, app, CGRect(x: 0, y: 0, width: 400, height: 400))], display: display, frontmostBundleID: nil)
+        XCTAssertTrue(out.allSatisfy { $0.shape == .rect })
+        XCTAssertGreaterThan(out.count, 1)
+    }
+    func testClippedEllipseFallsBackToRect() {
+        let out = RegionResolver.resolve(presets: cfg(), windows: [w(1, app, CGRect(x: 800, y: 0, width: 400, height: 400))], display: display, frontmostBundleID: nil)
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].shape, .rect)
+    }
+    func testShapeParsesFromJSON() throws {
+        let c = try PresetConfig.parse(data: #"{"apps":{"a":{"regions":[{"rect":[0,0,0.5,0.5],"shape":"ellipse"},{"rect":[0,0,1,1]}]}}}"#.data(using: .utf8)!)
+        XCTAssertEqual(c.apps["a"]!.regions[0].shape, .ellipse)
+        XCTAssertEqual(c.apps["a"]!.regions[1].shape, .rect)
+    }
+}

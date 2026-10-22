@@ -10,7 +10,10 @@ final class MenuBar: NSObject, NSMenuDelegate {
         var panic: () -> Void
         var toggleRegions: () -> Void
         var pick: () -> Void
+        var pickFor: (pid_t, String) -> Void
+        var removeApp: (String) -> Void
         var openPresets: () -> Void
+        var openLogs: () -> Void
         var reloadPresets: () -> Void
         var togglePointerGuard: () -> Void
         var toggleHUD: () -> Void
@@ -27,6 +30,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let panicItem = NSMenuItem()
     private let regionsItem = NSMenuItem()
     private let pickItem = NSMenuItem()
+    private let pickForItem = NSMenuItem()
+    private let configuredItem = NSMenuItem()
     private let pointerItem = NSMenuItem()
     private let hudItem = NSMenuItem()
     private let statusLine = NSMenuItem()
@@ -78,9 +83,16 @@ final class MenuBar: NSObject, NSMenuDelegate {
         menu.addItem(panicItem)
         menu.addItem(regionsItem)
         menu.addItem(pickItem)
+        pickForItem.title = "Pick regions for app"
+        pickForItem.submenu = NSMenu()
+        menu.addItem(pickForItem)
+        configuredItem.title = "Configured apps"
+        configuredItem.submenu = NSMenu()
+        menu.addItem(configuredItem)
         menu.addItem(.separator())
         menu.addItem(withTitle: "Open presets.json", action: #selector(openPresets), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Reload presets", action: #selector(reloadPresets), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Show log file", action: #selector(openLogs), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(pointerItem)
         menu.addItem(hudItem)
@@ -119,7 +131,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         warningLine.title = warning.map { "⚠ \($0)" } ?? ""
         warningLine.isHidden = warning == nil
         permissionItem.isHidden = !needsPermission
-        startStopItem.title = running ? "Stop proxy display" : "Start proxy display"
+        startStopItem.title = running ? "Stop capturing" : "Start capturing"
         panicItem.title = panic ? "Panic: ON (restore)" : "Panic"
         panicItem.state = panic ? .on : .off
         MenuBar.setKey(panicItem, hotkeys.panic)
@@ -152,6 +164,55 @@ final class MenuBar: NSObject, NSMenuDelegate {
         }
     }
 
+    struct RunningApp { var name: String; var pid: pid_t; var bundleID: String }
+    struct ConfiguredApp { var name: String; var bundleID: String; var regionCount: Int; var pid: pid_t? }
+
+    /// Rebuilds the two app submenus (called when the menu is about to open).
+    func updateApps(running: [RunningApp], configured: [ConfiguredApp]) {
+        let pickMenu = pickForItem.submenu!
+        pickMenu.removeAllItems()
+        if running.isEmpty { pickMenu.addItem(withTitle: "No apps with windows", action: nil, keyEquivalent: "") }
+        for app in running {
+            let mi = NSMenuItem(title: app.name, action: #selector(pickForApp(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = app.bundleID
+            mi.tag = Int(app.pid)
+            pickMenu.addItem(mi)
+        }
+        let cfgMenu = configuredItem.submenu!
+        cfgMenu.removeAllItems()
+        if configured.isEmpty { cfgMenu.addItem(withTitle: "None yet — use “Pick regions for app”", action: nil, keyEquivalent: "") }
+        for app in configured {
+            let mi = NSMenuItem(title: "\(app.name) — \(app.regionCount) region\(app.regionCount == 1 ? "" : "s")", action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            let edit = NSMenuItem(title: app.pid == nil ? "Edit regions… (app not running)" : "Edit regions…",
+                                  action: #selector(pickForApp(_:)), keyEquivalent: "")
+            edit.target = self
+            edit.representedObject = app.bundleID
+            edit.tag = Int(app.pid ?? 0)
+            edit.isEnabled = app.pid != nil
+            sub.addItem(edit)
+            let remove = NSMenuItem(title: "Remove all regions", action: #selector(removeApp(_:)), keyEquivalent: "")
+            remove.target = self
+            remove.representedObject = app.bundleID
+            sub.addItem(remove)
+            let id = NSMenuItem(title: app.bundleID, action: nil, keyEquivalent: "")
+            id.isEnabled = false
+            sub.addItem(id)
+            mi.submenu = sub
+            cfgMenu.addItem(mi)
+        }
+    }
+
+    @objc private func pickForApp(_ sender: NSMenuItem) {
+        guard let bundleID = sender.representedObject as? String else { return }
+        actions.pickFor(pid_t(sender.tag), bundleID)
+    }
+    @objc private func removeApp(_ sender: NSMenuItem) {
+        guard let bundleID = sender.representedObject as? String else { return }
+        actions.removeApp(bundleID)
+    }
+
     // MARK: Selectors
 
     @objc private func toggleProxy() { actions.toggleProxy() }
@@ -160,6 +221,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     @objc private func pick() { actions.pick() }
     @objc private func openPresets() { actions.openPresets() }
     @objc private func reloadPresets() { actions.reloadPresets() }
+    @objc private func openLogs() { actions.openLogs() }
     @objc private func togglePointerGuard() { actions.togglePointerGuard() }
     @objc private func toggleHUD() { actions.toggleHUD() }
     @objc private func openPermission() { actions.openScreenRecordingSettings() }

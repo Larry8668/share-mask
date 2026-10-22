@@ -30,6 +30,8 @@
 	<string>NSApplication</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>sharemask captures your real display so it can show a redacted copy on the "sharemask" virtual display, which is the one you share in video calls.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Optional: sharemask reads upcoming events so it can offer to start the proxy display before a video call begins.</string>
 	<key>NSSupportsAutomaticTermination</key>
 	<false/>
 	<key>NSSupportsSuddenTermination</key>

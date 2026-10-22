@@ -8,6 +8,7 @@ import CoreGraphics
 struct PixelRegion: Equatable {
     var rect: CGRect
     var mode: RedactMode
+    var shape: RegionShape = .rect
 }
 
 /// Geometry of the captured (source) display.
@@ -75,6 +76,16 @@ enum RegionResolver {
                 for occluder in occluders {
                     pieces = pieces.flatMap { subtract(occluder.boundsPoints, from: $0) }
                     if pieces.isEmpty { break }
+                }
+                // An ellipse survives as an ellipse only if nothing cut into it; otherwise the
+                // remaining rect pieces are used (over-redacts the ellipse's corners, never under).
+                if region.shape == .ellipse, pieces.count == 1, pieces[0] == clipped, clipped == absolute {
+                    if out.count + 1 > maxRegions {
+                        overflow.append(PixelRegion(rect: toPixels(clipped, display: display), mode: region.mode))
+                    } else {
+                        out.append(PixelRegion(rect: toPixels(clipped, display: display), mode: region.mode, shape: .ellipse))
+                    }
+                    continue
                 }
 
                 // Safety: if the subtraction produced too many pieces, over-redact with the
