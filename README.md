@@ -43,6 +43,12 @@ Screen Recording grant. `make identity` puts the certificate in its own keychain
 (`~/Library/Keychains/sharemask-dev.keychain-db`) with codesign pre-authorised so builds never
 prompt. `make` falls back to ad-hoc with a warning if the identity is missing.
 
+Always launch through LaunchServices (`make run` / `open build/sharemask.app` / double-click). If you
+run the binary directly from a terminal, macOS attributes the Screen Recording request to the
+*terminal* (the "responsible process"), prompts for the terminal instead, and sharemask's own grant
+is never consulted. Logs: `/usr/bin/log show --last 5m --info --predicate 'subsystem == "dev.sharemask.app"'`
+(note `log` is also a zsh builtin).
+
 First launch: grant **Screen Recording** to sharemask (System Settings → Privacy & Security →
 Screen & System Audio Recording). If macOS asks for a relaunch, use *Relaunch sharemask* in the menu.
 
@@ -147,6 +153,9 @@ Encoded in `VirtualDisplay.swift`; measured on macOS 27.0.1 with `make probe`:
 `FrameClock` logs every 5 s (unified log, subsystem `dev.sharemask.app`, or stderr when run from a
 terminal) and the menu shows: fps, capture→present latency p50/p95, pipeline time, GPU time, drops.
 Targets: < 40 ms p95 capture→present, < 4 ms GPU per frame on Apple Silicon.
+Measured on an M-series MacBook at 2940×1912 (macOS 27.0.1): capture→present 4 ms p50 / 6–17 ms p95,
+pipeline 2.6 ms, GPU 1.3–1.5 ms. The fps figure follows screen activity: ScreenCaptureKit only
+delivers frames when content changes, so a static desktop reads ~8–10 fps and rises to 60 under motion.
 
 ## Non-goals
 
