@@ -8,7 +8,7 @@
 # Recording grant survives updates) but is not notarised, so Gatekeeper would otherwise refuse it.
 cask "sharemask" do
   version "0.1.0"
-  sha256 "REPLACE_WITH_SHA256_FROM_make_release"
+  sha256 "65645c91e15ada56ba78ac49d197e30f9ac5312acd4c0604f43c1ad4855864c2"
 
   url "https://github.com/Larry8668/share-mask/releases/download/v#{version}/sharemask-#{version}.zip"
   name "sharemask"

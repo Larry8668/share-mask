@@ -62,7 +62,7 @@ probe: bundle
 # Zip for GitHub Releases / the Homebrew cask. Prints the sha256 the cask needs.
 release: bundle
 	@rm -f "$(ZIP)"
-	ditto -c -k --keepParent "$(APP)" "$(ZIP)"
+	ditto -c -k --keepParent --norsrc --noextattr "$(APP)" "$(ZIP)"
 	@echo "sha256: $$(shasum -a 256 "$(ZIP)" | cut -d' ' -f1)"
 	@echo "$(ZIP)"
 
