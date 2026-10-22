@@ -1,0 +1,150 @@
+import XCTest
+@testable import sharemask
+
+final class RegionResolverTests: XCTestCase {
+    // Retina 1470x956 pt display at origin, 2940x1912 px.
+    let retina = DisplayGeometry(boundsPoints: CGRect(x: 0, y: 0, width: 1470, height: 956), scale: 2,
+                                 pixelSize: CGSize(width: 2940, height: 1912))
+    let nonRetina = DisplayGeometry(boundsPoints: CGRect(x: 0, y: 0, width: 1920, height: 1080), scale: 1,
+                                    pixelSize: CGSize(width: 1920, height: 1080))
+
+    func window(_ id: UInt32, _ bundle: String?, _ rect: CGRect, layer: Int = 0, alpha: CGFloat = 1, sharing: Int = 1, pid: pid_t = 100) -> TrackedWindow {
+        TrackedWindow(windowID: id, pid: pid, bundleID: bundle, boundsPoints: rect, layer: layer, alpha: alpha, sharingState: sharing)
+    }
+
+    func presets(_ apps: [String: AppPreset]) -> PresetConfig {
+        var c = PresetConfig.empty; c.apps = apps; return c
+    }
+
+    let whatsapp = "net.whatsapp.WhatsApp"
+    var chatList: AppPreset {
+        AppPreset(regions: [PresetRegion(name: "chat list", rect: CGRect(x: 0, y: 0, width: 0.5, height: 1), mode: .pixellate(scale: 24))],
+                  whenFrontmostOnly: false)
+    }
+
+    func testSingleWindowRetinaFlipsAndScales() {
+        // Window at (100, 200) pt, 400x300 pt. Left half → x 100..300 pt, y 200..500 pt (top-left).
+        let w = window(1, whatsapp, CGRect(x: 100, y: 200, width: 400, height: 300))
+        let out = RegionResolver.resolve(presets: presets([whatsapp: chatList]), windows: [w], display: retina, frontmostBundleID: nil)
+        XCTAssertEqual(out.count, 1)
+        // Pixels: x 200..600, top y 400..1000 → CI bottom-left y = 1912 - 1000 = 912, height 600.
+        XCTAssertEqual(out[0].rect, CGRect(x: 200, y: 912, width: 400, height: 600))
+        XCTAssertEqual(out[0].mode, .pixellate(scale: 24))
+    }
+
+    func testNonRetinaScaleOne() {
+        let w = window(1, whatsapp, CGRect(x: 0, y: 0, width: 1920, height: 1080))
+        let out = RegionResolver.resolve(presets: presets([whatsapp: chatList]), windows: [w], display: nonRetina, frontmostBundleID: nil)
+        XCTAssertEqual(out, [PixelRegion(rect: CGRect(x: 0, y: 0, width: 960, height: 1080), mode: .pixellate(scale: 24))])
+    }
+
+    func testOccluderInFrontIsSubtracted() {
+        let target = window(1, whatsapp, CGRect(x: 0, y: 0, width: 1000, height: 1000))
+        // Terminal covering the middle of the chat list (which is x 0..500).
+        let terminal = window(2, "com.apple.Terminal", CGRect(x: 200, y: 200, width: 600, height: 200))
+        let out = RegionResolver.resolve(presets: presets([whatsapp: chatList]), windows: [terminal, target], display: nonRetina, frontmostBundleID: nil)
+        // Remaining: top band y 0..200 (x 0..500), bottom band y 400..1000, left sliver x 0..200 y 200..400.
+        let rects = Set(out.map { NSStringFromRect($0.rect) })
+        let expected = Set([
+            CGRect(x: 0, y: 1080 - 200, width: 500, height: 200),
+            CGRect(x: 0, y: 1080 - 1000, width: 500, height: 600),
+            CGRect(x: 0, y: 1080 - 400, width: 200, height: 200),
+        ].map { NSStringFromRect($0) })
+        XCTAssertEqual(rects, expected)
+        // The terminal itself must not be covered.
+        for r in out { XCTAssertFalse(r.rect.intersects(CGRect(x: 200, y: 1080 - 400, width: 600, height: 200).insetBy(dx: 1, dy: 1))) }
+    }
+
+    func testWindowBehindDoesNotOcclude() {
+        let target = window(1, whatsapp, CGRect(x: 0, y: 0, width: 1000, height: 1000))
+        let behind = window(2, "com.apple.Terminal", CGRect(x: 200, y: 200, width: 600, height: 200))
+        let out = RegionResolver.resolve(presets: presets([whatsapp: chatList]), windows: [target, behind], display: nonRetina, frontmostBundleID: nil)
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].rect, CGRect(x: 0, y: 80, width: 500, height: 1000))
+    }
+
+    func testNonCapturedOccluderDoesNotPunchHole() {
+        let target = window(1, whatsapp, CGRect(x: 0, y: 0, width: 1000, height: 1000))
+        let hidden = window(2, "com.1password", CGRect(x: 0, y: 0, width: 400, height: 400), sharing: 0)
+        let out = RegionResolver.resolve(presets: presets([whatsapp: chatList]), windows: [hidden, target], display: nonRetina, frontmostBundleID: nil)
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].rect, CGRect(x: 0, y: 80, width: 500, height: 1000))
+    }
+
+    func testOwnPIDIgnoredAsOccluder() {
+        let target = window(1, whatsapp, CGRect(x: 0, y: 0, width: 1000, height: 1000))
+        let hud = window(2, "dev.sharemask.app", CGRect(x: 0, y: 0, width: 400, height: 400), pid: 999)
+        let out = RegionResolver.resolve(presets: presets([whatsapp: chatList]), windows: [hud, target], display: nonRetina, frontmostBundleID: nil, ignorePIDs: [999])
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].rect.height, 1000)
+    }
+
+    func testPartiallyOffScreenIsClipped() {
+        let w = window(1, whatsapp, CGRect(x: -200, y: -100, width: 1000, height: 500))
+        let out = RegionResolver.resolve(presets: presets([whatsapp: chatList]), windows: [w], display: nonRetina, frontmostBundleID: nil)
+        XCTAssertEqual(out.count, 1)
+        // Left half spans x -200..300 → clipped to 0..300; y -100..400 → clipped 0..400.
+        XCTAssertEqual(out[0].rect, CGRect(x: 0, y: 1080 - 400, width: 300, height: 400))
+    }
+
+    func testWindowOnAnotherDisplayIsSkipped() {
+        let w = window(1, whatsapp, CGRect(x: 3000, y: 0, width: 400, height: 300))
+        let out = RegionResolver.resolve(presets: presets([whatsapp: chatList]), windows: [w], display: nonRetina, frontmostBundleID: nil)
+        XCTAssertTrue(out.isEmpty)
+    }
+
+    func testMultiDisplayOffset() {
+        // Secondary display to the left of the primary, Retina.
+        let display = DisplayGeometry(boundsPoints: CGRect(x: -1440, y: -200, width: 1440, height: 900), scale: 2,
+                                      pixelSize: CGSize(width: 2880, height: 1800))
+        let w = window(1, whatsapp, CGRect(x: -1440, y: -200, width: 400, height: 300))
+        let out = RegionResolver.resolve(presets: presets([whatsapp: chatList]), windows: [w], display: display, frontmostBundleID: nil)
+        XCTAssertEqual(out, [PixelRegion(rect: CGRect(x: 0, y: 1800 - 600, width: 400, height: 600), mode: .pixellate(scale: 24))])
+    }
+
+    func testNonNormalLayerAndInvisibleWindowsSkipped() {
+        let popup = window(1, whatsapp, CGRect(x: 0, y: 0, width: 400, height: 300), layer: 25)
+        let ghost = window(2, whatsapp, CGRect(x: 0, y: 0, width: 400, height: 300), alpha: 0)
+        let out = RegionResolver.resolve(presets: presets([whatsapp: chatList]), windows: [popup, ghost], display: nonRetina, frontmostBundleID: nil)
+        XCTAssertTrue(out.isEmpty)
+    }
+
+    func testWhenFrontmostOnly() {
+        var app = chatList; app.whenFrontmostOnly = true
+        let w = window(1, whatsapp, CGRect(x: 0, y: 0, width: 400, height: 300))
+        XCTAssertTrue(RegionResolver.resolve(presets: presets([whatsapp: app]), windows: [w], display: nonRetina, frontmostBundleID: "com.apple.Terminal").isEmpty)
+        XCTAssertEqual(RegionResolver.resolve(presets: presets([whatsapp: app]), windows: [w], display: nonRetina, frontmostBundleID: whatsapp).count, 1)
+    }
+
+    func testSubPixelEdgesSnapOutwards() {
+        let w = window(1, whatsapp, CGRect(x: 10.3, y: 20.7, width: 100.2, height: 50.1))
+        let out = RegionResolver.resolve(presets: presets([whatsapp: chatList]), windows: [w], display: retina, frontmostBundleID: nil)
+        let r = out[0].rect
+        XCTAssertEqual(r.minX, 20)               // floor(10.3*2)
+        XCTAssertEqual(r.maxX, 121)              // ceil((10.3+50.1)*2) = ceil(120.8)
+        XCTAssertEqual(r.maxY, 1912 - 41)        // floor(20.7*2)=41 from top
+        XCTAssertEqual(r.minY, 1912 - 142)       // ceil((20.7+50.1)*2)=ceil(141.6)=142
+    }
+
+    func testOverflowCollapsesToSafeRect() {
+        // One target, 70 tiny occluders → far more than 64 pieces; must fall back to the full rect.
+        let target = window(1, whatsapp, CGRect(x: 0, y: 0, width: 1000, height: 1000))
+        var windows: [TrackedWindow] = []
+        for i in 0..<70 { windows.append(window(UInt32(i + 10), "x", CGRect(x: 10 + i * 6, y: 10 + i * 12, width: 3, height: 3))) }
+        windows.append(target)
+        let out = RegionResolver.resolve(presets: presets([whatsapp: chatList]), windows: windows, display: nonRetina, frontmostBundleID: nil)
+        XCTAssertLessThanOrEqual(out.count, 64)
+        let union = out.dropFirst().reduce(out[0].rect) { $0.union($1.rect) }
+        XCTAssertTrue(union.contains(CGRect(x: 0, y: 80, width: 500, height: 1000)))
+    }
+
+    func testSubtractProducesAtMostFourRects() {
+        let a = CGRect(x: 0, y: 0, width: 100, height: 100)
+        let hole = CGRect(x: 25, y: 25, width: 50, height: 50)
+        let pieces = RegionResolver.subtract(hole, from: a)
+        XCTAssertEqual(pieces.count, 4)
+        XCTAssertEqual(pieces.reduce(0) { $0 + $1.width * $1.height }, 100 * 100 - 50 * 50)
+        XCTAssertEqual(RegionResolver.subtract(CGRect(x: 500, y: 500, width: 10, height: 10), from: a), [a])
+        XCTAssertTrue(RegionResolver.subtract(a.insetBy(dx: -1, dy: -1), from: a).isEmpty)
+    }
+}

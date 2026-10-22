@@ -1,0 +1,183 @@
+import Foundation
+import CoreGraphics
+
+/// How a region is redacted. Default is coarse pixellation: a Gaussian blur at small radius is
+/// partially invertible; pixellation at a coarse block size (24 px) is not.
+enum RedactMode: Equatable {
+    case pixellate(scale: Int)
+    case blur(radius: Float)
+    case solid(color: RGBA)
+
+    static let defaultPixellate = RedactMode.pixellate(scale: 24)
+}
+
+struct RGBA: Equatable {
+    var r: Double, g: Double, b: Double, a: Double
+    static let black = RGBA(r: 0, g: 0, b: 0, a: 1)
+
+    /// Parses "#RRGGBB" or "#RRGGBBAA" (case-insensitive, '#' optional).
+    init?(hex: String) {
+        var s = hex.trimmingCharacters(in: .whitespaces)
+        if s.hasPrefix("#") { s.removeFirst() }
+        guard s.count == 6 || s.count == 8, let v = UInt64(s, radix: 16) else { return nil }
+        if s.count == 6 {
+            self.init(r: Double((v >> 16) & 0xFF) / 255, g: Double((v >> 8) & 0xFF) / 255,
+                      b: Double(v & 0xFF) / 255, a: 1)
+        } else {
+            self.init(r: Double((v >> 24) & 0xFF) / 255, g: Double((v >> 16) & 0xFF) / 255,
+                      b: Double((v >> 8) & 0xFF) / 255, a: Double(v & 0xFF) / 255)
+        }
+    }
+    init(r: Double, g: Double, b: Double, a: Double) { self.r = r; self.g = g; self.b = b; self.a = a }
+}
+
+/// A region of a window, in window-normalised coordinates [0,1], origin top-left.
+struct PresetRegion: Equatable {
+    var name: String
+    var rect: CGRect        // x, y, w, h normalised to the window frame
+    var mode: RedactMode
+}
+
+struct AppPreset: Equatable {
+    var regions: [PresetRegion]
+    var whenFrontmostOnly: Bool
+}
+
+struct HotkeyConfig: Equatable {
+    var panic: String?
+    var toggle: String?
+    var pick: String?
+}
+
+/// The fully-resolved in-memory form of ~/.config/sharemask/presets.json.
+struct PresetConfig: Equatable {
+    var version: Int
+    var defaultMode: RedactMode
+    var apps: [String: AppPreset]          // keyed by bundle identifier
+    var hotkeys: HotkeyConfig
+    var pointerGuard: Bool
+    var hud: Bool
+    var idleMode: Bool
+
+    static let empty = PresetConfig(version: 1, defaultMode: .defaultPixellate, apps: [:],
+                                    hotkeys: HotkeyConfig(panic: "cmd+shift+ctrl+B",
+                                                          toggle: "cmd+shift+ctrl+M",
+                                                          pick: "cmd+shift+ctrl+P"),
+                                    pointerGuard: true, hud: false, idleMode: false)
+}
+
+// MARK: - JSON (de)serialisation
+
+/// Raw Codable mirror of the on-disk schema. Kept separate from the resolved model so that
+/// per-region fields can fall back to `defaults`, and unknown keys are ignored.
+struct PresetFile: Codable {
+    struct Defaults: Codable {
+        var mode: String?
+        var scale: Int?
+        var radius: Float?
+        var color: String?
+    }
+    struct Region: Codable {
+        var name: String?
+        var rect: [Double]
+        var mode: String?
+        var scale: Int?
+        var radius: Float?
+        var color: String?
+    }
+    struct App: Codable {
+        var regions: [Region]
+        var whenFrontmostOnly: Bool?
+    }
+    struct Hotkeys: Codable {
+        var panic: String?
+        var toggle: String?
+        var pick: String?
+    }
+    var version: Int?
+    var defaults: Defaults?
+    var apps: [String: App]?
+    var hotkeys: Hotkeys?
+    var pointerGuard: Bool?
+    var hud: Bool?
+    var idleMode: Bool?
+}
+
+enum PresetError: Error, CustomStringConvertible {
+    case badRect(app: String, region: String)
+    case unknownMode(String)
+    case badColor(String)
+    case unsupportedVersion(Int)
+
+    var description: String {
+        switch self {
+        case .badRect(let app, let r): return "region '\(r)' of \(app): rect must be [x, y, w, h] within [0,1]"
+        case .unknownMode(let m): return "unknown mode '\(m)' (expected pixellate | blur | solid)"
+        case .badColor(let c): return "bad color '\(c)' (expected #RRGGBB)"
+        case .unsupportedVersion(let v): return "unsupported presets version \(v)"
+        }
+    }
+}
+
+extension PresetConfig {
+    static func parse(data: Data) throws -> PresetConfig {
+        let file = try JSONDecoder().decode(PresetFile.self, from: data)
+        return try resolve(file)
+    }
+
+    static func resolve(_ file: PresetFile) throws -> PresetConfig {
+        let version = file.version ?? 1
+        guard version == 1 else { throw PresetError.unsupportedVersion(version) }
+
+        let d = file.defaults
+        let defaultMode = try mode(name: d?.mode ?? "pixellate", scale: d?.scale, radius: d?.radius,
+                                   color: d?.color, fallback: .defaultPixellate)
+
+        var apps: [String: AppPreset] = [:]
+        for (bundleID, app) in file.apps ?? [:] {
+            var regions: [PresetRegion] = []
+            for (i, r) in app.regions.enumerated() {
+                let name = r.name ?? "region \(i + 1)"
+                guard r.rect.count == 4 else { throw PresetError.badRect(app: bundleID, region: name) }
+                let rect = CGRect(x: r.rect[0], y: r.rect[1], width: r.rect[2], height: r.rect[3])
+                guard rect.width > 0, rect.height > 0,
+                      rect.minX >= 0, rect.minY >= 0, rect.maxX <= 1.0001, rect.maxY <= 1.0001
+                else { throw PresetError.badRect(app: bundleID, region: name) }
+                let m = try mode(name: r.mode ?? d?.mode ?? "pixellate",
+                                 scale: r.scale ?? d?.scale, radius: r.radius ?? d?.radius,
+                                 color: r.color ?? d?.color, fallback: defaultMode)
+                regions.append(PresetRegion(name: name, rect: rect.clamped01, mode: m))
+            }
+            apps[bundleID] = AppPreset(regions: regions, whenFrontmostOnly: app.whenFrontmostOnly ?? false)
+        }
+
+        let hk = HotkeyConfig(panic: file.hotkeys?.panic ?? PresetConfig.empty.hotkeys.panic,
+                              toggle: file.hotkeys?.toggle ?? PresetConfig.empty.hotkeys.toggle,
+                              pick: file.hotkeys?.pick ?? PresetConfig.empty.hotkeys.pick)
+        return PresetConfig(version: version, defaultMode: defaultMode, apps: apps, hotkeys: hk,
+                            pointerGuard: file.pointerGuard ?? true, hud: file.hud ?? false,
+                            idleMode: file.idleMode ?? false)
+    }
+
+    private static func mode(name: String, scale: Int?, radius: Float?, color: String?,
+                             fallback: RedactMode) throws -> RedactMode {
+        switch name.lowercased() {
+        case "pixellate", "pixelate", "pixel":
+            return .pixellate(scale: max(2, scale ?? 24))
+        case "blur":
+            return .blur(radius: max(1, radius ?? 30))
+        case "solid", "black", "box":
+            guard let c = RGBA(hex: color ?? "#000000") else { throw PresetError.badColor(color ?? "") }
+            return .solid(color: c)
+        default:
+            throw PresetError.unknownMode(name)
+        }
+    }
+}
+
+extension CGRect {
+    var clamped01: CGRect {
+        let x0 = max(0, minX), y0 = max(0, minY), x1 = min(1, maxX), y1 = min(1, maxY)
+        return CGRect(x: x0, y: y0, width: max(0, x1 - x0), height: max(0, y1 - y0))
+    }
+}

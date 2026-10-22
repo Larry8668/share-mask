@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "defaults": { "mode": "pixellate", "scale": 24 },
+  "apps": {
+    "net.whatsapp.WhatsApp": {
+      "regions": [
+        { "name": "chat list", "rect": [0.0, 0.0, 0.30, 1.0] },
+        { "name": "header",    "rect": [0.0, 0.0, 1.0, 0.08], "mode": "solid", "color": "#000000" }
+      ]
+    },
+    "com.tinyspeck.slackmacgap": {
+      "regions": [ { "name": "sidebar", "rect": [0.0, 0.0, 0.22, 1.0], "mode": "blur", "radius": 30 } ]
+    },
+    "com.apple.MobileSMS": {
+      "regions": [ { "name": "whole", "rect": [0, 0, 1, 1] } ]
+    }
+  },
+  "hotkeys": {
+    "panic":  "cmd+shift+ctrl+B",
+    "toggle": "cmd+shift+ctrl+M",
+    "pick":   "cmd+shift+ctrl+P"
+  },
+  "pointerGuard": true,
+  "hud": false,
+  "idleMode": false
+}
