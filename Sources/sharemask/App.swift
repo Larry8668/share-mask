@@ -231,6 +231,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 status = "Error"; warning = e; menuBar.setIcon(.error)
                 permissionMissing = e.contains("permission")
             }
+            if !vdSafe(p) {
+                warning = (warning.map { $0 + " · " } ?? "") + "virtual display is main or mirrored — un-mirror it in System Settings → Displays"
+                menuBar.setIcon(.error)
+            }
             if p.virtualDisplayModeChanged {
                 warning = (warning.map { $0 + " · " } ?? "") + "virtual display mode was changed; teardown requires relaunch"
             }
@@ -252,6 +256,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try? task.run()
         NSApp.terminate(nil)
     }
+
+    private func vdSafe(_ p: Pipeline) -> Bool { p.virtualDisplay.isSafeToPresent }
 
     // MARK: Alerts
 

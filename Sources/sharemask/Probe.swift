@@ -94,6 +94,7 @@ enum Probe {
         line += " pixels=\(CGDisplayPixelsWide(id))x\(CGDisplayPixelsHigh(id))"
         line += " vendor=0x\(String(CGDisplayVendorNumber(id), radix: 16)) model=0x\(String(CGDisplayModelNumber(id), radix: 16)) serial=\(CGDisplaySerialNumber(id))"
         line += CGDisplayIsMain(id) != 0 ? " MAIN" : ""
+        if CGDisplayIsInMirrorSet(id) != 0 { line += " MIRRORSET(mirrors \(CGDisplayMirrorsDisplay(id)))" }
         if withModes {
             if let m = CGDisplayCopyDisplayMode(id) {
                 line += " mode=\(m.pixelWidth)x\(m.pixelHeight)px/\(m.width)x\(m.height)pt@\(Int(m.refreshRate))"

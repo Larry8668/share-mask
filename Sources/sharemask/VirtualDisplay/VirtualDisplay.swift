@@ -108,6 +108,12 @@ final class VirtualDisplay {
     /// Bounds in global points, top-left origin.
     var bounds: CGRect { CGDisplayBounds(displayID) }
 
+    /// Safety: the proxy must never be the main display or part of a mirror set with a real
+    /// display, otherwise its black presenter window would cover the user's own screen.
+    var isSafeToPresent: Bool {
+        CGDisplayIsMain(displayID) == 0 && CGDisplayIsInMirrorSet(displayID) == 0
+    }
+
     static func isActive(_ id: CGDirectDisplayID) -> Bool {
         var ids = [CGDirectDisplayID](repeating: 0, count: 32)
         var count: UInt32 = 0

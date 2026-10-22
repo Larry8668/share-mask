@@ -9,7 +9,7 @@ enum Log {
         let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"; return f
     }()
 
-    static func info(_ message: String) { emit("INFO", message); logger.info("\(message, privacy: .public)") }
+    static func info(_ message: String) { emit("INFO", message); logger.notice("\(message, privacy: .public)") }
     static func warn(_ message: String) { emit("WARN", message); logger.warning("\(message, privacy: .public)") }
     static func error(_ message: String) { emit("ERROR", message); logger.error("\(message, privacy: .public)") }
 

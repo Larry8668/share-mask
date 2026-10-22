@@ -49,6 +49,10 @@ final class Presenter: FrameSink {
 
     func attachToScreen() -> Bool {
         if window != nil { return true }
+        guard CGDisplayIsMain(virtualDisplayID) == 0, CGDisplayIsInMirrorSet(virtualDisplayID) == 0 else {
+            Log.error("refusing to present: virtual display \(virtualDisplayID) is main or mirrored (would cover the real screen)")
+            return false
+        }
         guard let screen = NSScreen.screens.first(where: { $0.displayID == virtualDisplayID }) else {
             if screenObserver == nil {
                 screenObserver = NotificationCenter.default.addObserver(
@@ -95,6 +99,11 @@ final class Presenter: FrameSink {
         guard let w = window else { _ = attachToScreen(); return }
         guard let screen = NSScreen.screens.first(where: { $0.displayID == virtualDisplayID }) else {
             Log.warn("virtual display screen disappeared")
+            return
+        }
+        if CGDisplayIsMain(virtualDisplayID) != 0 || CGDisplayIsInMirrorSet(virtualDisplayID) != 0 {
+            Log.error("virtual display became main/mirrored; hiding presenter")
+            w.orderOut(nil); window = nil
             return
         }
         if w.frame != screen.frame { w.setFrame(screen.frame, display: true) }
