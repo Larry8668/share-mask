@@ -27,6 +27,11 @@ final class MenuBar: NSObject, NSMenuDelegate {
         var openScreenRecordingSettings: () -> Void
         var relaunch: () -> Void
         var bringBackStrays: () -> Void
+        var checkUpdates: () -> Void
+        var updateNow: () -> Void
+        var copyUpdateCommand: () -> Void
+        var openReleasePage: () -> Void
+        var toggleUpdateChecks: () -> Void
         var removeDisplay: () -> Void
         var quit: () -> Void
     }
@@ -55,6 +60,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let permissionItem = NSMenuItem()
     private let relaunchItem = NSMenuItem()
     private let strayItem = NSMenuItem()
+    private let versionItem = NSMenuItem()
+    private let updateChecksItem = NSMenuItem()
     private let removeDisplayItem = NSMenuItem()
 
     init(actions: Actions) {
@@ -152,6 +159,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
         settings.addItem(loginItem)
         settings.addItem(pointerItem)
         settings.addItem(hudItem)
+        updateChecksItem.title = "Check for updates daily"
+        bind(updateChecksItem, #selector(toggleUpdateChecks))
+        settings.addItem(updateChecksItem)
         let settingsItem = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
         settingsItem.submenu = settings
         menu.addItem(settingsItem)
@@ -166,6 +176,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
         troubleItem.submenu = trouble
         menu.addItem(troubleItem)
         menu.addItem(.separator())
+        versionItem.submenu = NSMenu()
+        menu.addItem(versionItem)
         menu.addItem(item("Quit sharemask", #selector(quit), key: "q"))
         item.menu = menu
     }
@@ -373,6 +385,35 @@ final class MenuBar: NSObject, NSMenuDelegate {
     @objc private func openPermission() { actions.openScreenRecordingSettings() }
     @objc private func relaunch() { actions.relaunch() }
     @objc private func bringBackStrays() { actions.bringBackStrays() }
+    @objc private func checkUpdates() { actions.checkUpdates() }
+    @objc private func updateNow() { actions.updateNow() }
+    @objc private func copyUpdateCommand() { actions.copyUpdateCommand() }
+    @objc private func openReleasePage() { actions.openReleasePage() }
+    @objc private func toggleUpdateChecks() { actions.toggleUpdateChecks() }
+
+    /// Footer: "sharemask 0.1.4 — up to date" or "⬆ Update available: 0.1.5", submenu with actions.
+    func updateVersion(current: String, status: UpdateChecker.Status, checksEnabled: Bool, homebrew: Bool) {
+        updateChecksItem.state = checksEnabled ? .on : .off
+        switch status {
+        case .available(let v): versionItem.title = "⬆ Update available: \(v) (you have \(current))"
+        case .upToDate: versionItem.title = "sharemask \(current) — up to date"
+        case .checking: versionItem.title = "sharemask \(current) — checking…"
+        case .failed: versionItem.title = "sharemask \(current) — update check failed"
+        case .unknown: versionItem.title = "sharemask \(current)"
+        }
+        let m = versionItem.submenu!
+        m.removeAllItems()
+        if case .available = status {
+            m.addItem(item(homebrew ? "Update now (runs Homebrew in Terminal)" : "Download update…", #selector(updateNow)))
+        }
+        if homebrew {
+            let copy = item("Copy update command", #selector(copyUpdateCommand))
+            copy.toolTip = UpdateChecker.brewCommand
+            m.addItem(copy)
+        }
+        m.addItem(item("Release notes", #selector(openReleasePage)))
+        m.addItem(item("Check for updates now", #selector(checkUpdates)))
+    }
     @objc private func removeDisplay() { actions.removeDisplay() }
     @objc private func quit() { actions.quit() }
 
