@@ -31,7 +31,7 @@ final class FrameClock {
     private var droppedCount = 0
     private let capacity = 240
     private var lastLog = CACurrentMediaTime()
-    var logInterval: TimeInterval = 5
+    var logInterval: TimeInterval = 15
 
     static func hostSeconds() -> Double { CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock())) }
 

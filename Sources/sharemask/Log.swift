@@ -3,8 +3,9 @@ import os
 
 /// Logging façade. Every line goes to three places so problems can be reconstructed after the fact:
 ///
-/// 1. **File**: `~/Library/Logs/sharemask/sharemask.log` (append; rotated at 5 MB to `.1`).
-///    Survives relaunches and crashes; readable with `tail -f` or Console.app.
+/// 1. **File**: `~/Library/Logs/sharemask/sharemask.log` (append; rotated at 5 MB to `.1`, the
+///    previous `.1` is deleted, so disk use is capped at ~10 MB). Survives relaunches and crashes;
+///    readable with `tail -f` or Console.app.
 /// 2. **Unified log**: subsystem `dev.sharemask.app` at notice/error level (info-level entries are
 ///    NOT persisted by macOS, so we never log below notice).
 ///    `/usr/bin/log show --last 1h --info --predicate 'subsystem == "dev.sharemask.app"'`
@@ -30,7 +31,7 @@ enum Log {
 
     /// Call once at launch: opens the file, logs a session header, installs crash hooks.
     static func start(role: String) {
-        queue.sync { openFile() }
+        queue.sync { openFile(); pruneStrays() }
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
         let os = ProcessInfo.processInfo.operatingSystemVersionString
         info("=== sharemask \(v) \(role) started · pid \(getpid()) · macOS \(os) · \(Bundle.main.bundlePath)")
@@ -57,6 +58,15 @@ enum Log {
         guard let h = handle, let data = line.data(using: .utf8) else { return }
         h.write(data)
         if h.offsetInFile > maxBytes { rotate() }
+    }
+
+    /// Removes anything in the log folder other than the two files we manage (older layouts, crash
+    /// dumps copied there by hand, …) so the folder can never grow unbounded.
+    private static func pruneStrays() {
+        guard let items = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return }
+        for url in items where !["sharemask.log", "sharemask.log.1"].contains(url.lastPathComponent) {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     private static func rotate() {

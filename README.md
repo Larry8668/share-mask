@@ -228,7 +228,8 @@ Encoded in `VirtualDisplay.swift`; measured on macOS 27.0.1 with `make probe`:
 
 ## Logs
 
-Everything goes to `~/Library/Logs/sharemask/sharemask.log` (rotated at 5 MB), to the unified log
+Everything goes to `~/Library/Logs/sharemask/sharemask.log` (rotated at 5 MB, one previous file
+kept, so never more than ~10 MB on disk; the folder is pruned at launch), to the unified log
 (subsystem `dev.sharemask.app`, notice level) and to stderr when run from a terminal. Crashes write
 a final `[FATAL]` line; macOS crash reports are in `~/Library/Logs/DiagnosticReports`.
 

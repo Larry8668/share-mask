@@ -37,6 +37,7 @@ bundle: build
 	@cp "$(BIN)" "$(CONTENTS)/MacOS/$(APP_NAME)"
 	@cp Resources/Info.plist "$(CONTENTS)/Info.plist"
 	@cp Resources/presets.example.json "$(CONTENTS)/Resources/presets.example.json"
+	@cp Resources/AppIcon.icns "$(CONTENTS)/Resources/AppIcon.icns"
 	@printf 'APPL????' > "$(CONTENTS)/PkgInfo"
 	@$(MAKE) --no-print-directory sign
 
