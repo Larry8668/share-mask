@@ -16,11 +16,21 @@ final class Pipeline {
         var isRunning: Bool { self == .running }
     }
 
-    let virtualDisplay: VirtualDisplay
+    /// The proxy display exists only while capture is wanted (on demand): outside meetings there is
+    /// no hidden screen for other apps' windows to get lost on. See bringUpDisplay/tearDownDisplay.
+    private(set) var virtualDisplay: VirtualDisplay?
+    let displaySpec: VirtualDisplay.Spec
+    /// Main thread. Fired after the display is created (true) or removed (false).
+    var onDisplayChange: ((Bool) -> Void)?
     let tracker: WindowTracker
     let clock = FrameClock()
     let redactor: Redactor
-    let presenter: Presenter
+    private var _presenter: Presenter?
+    /// Read from the render queue too, so access goes through the lock.
+    var presenter: Presenter? {
+        get { lock.lock(); defer { lock.unlock() }; return _presenter }
+        set { lock.lock(); _presenter = newValue; lock.unlock() }
+    }
     private(set) var source: SourceDisplay
     private var capture: Capture?
     private let device: MTLDevice
@@ -99,13 +109,67 @@ final class Pipeline {
         lock.lock(); _demoRegions = regions; lock.unlock()
     }
 
-    init(virtualDisplay: VirtualDisplay, source: SourceDisplay, tracker: WindowTracker) {
-        self.virtualDisplay = virtualDisplay
+    init(displaySpec: VirtualDisplay.Spec, source: SourceDisplay, tracker: WindowTracker) {
+        self.displaySpec = displaySpec
         self.source = source
         self.tracker = tracker
         device = MTLCreateSystemDefaultDevice()!
         redactor = Redactor(device: device)
-        presenter = Presenter(device: device, context: redactor.context, virtualDisplayID: virtualDisplay.displayID)
+    }
+
+    // MARK: On-demand proxy display
+
+    /// Creates the virtual display + presenter window if they don't exist. Main thread; ~0.1–0.3 s.
+    @discardableResult
+    func bringUpDisplay() -> Bool {
+        dispatchPrecondition(condition: .onQueue(.main))
+        if virtualDisplay != nil { return true }
+        do {
+            let vd = try VirtualDisplay.create(spec: displaySpec)
+            virtualDisplay = vd
+            let pr = Presenter(device: device, context: redactor.context, virtualDisplayID: vd.displayID)
+            presenter = pr
+            _ = pr.attachToScreen()
+            Log.info("proxy display \(vd.displayID) created on demand (\(displaySpec.modeWidth)x\(displaySpec.modeHeight))")
+            onDisplayChange?(true)
+            return true
+        } catch {
+            Log.error("could not create proxy display: \(error)")
+            state = .error("\(error)")
+            return false
+        }
+    }
+
+    /// Closes the presenter and removes the virtual display (macOS moves any windows on it back to
+    /// the real display). Main thread.
+    func tearDownDisplay() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard let vd = virtualDisplay else { return }
+        presenter?.close()
+        presenter = nil
+        virtualDisplay = nil
+        removalPending = true
+        vd.releaseAsync { [weak self] t in
+            self?.removalPending = false
+            if let t = t { Log.info("proxy display removed in \(Int(t * 1000)) ms") }
+            else { Log.error("proxy display \(vd.displayID) still listed 5 s after release") }
+            self?.onDisplayChange?(false)
+        }
+    }
+
+    /// True between releasing the display and the window server dropping it. A new display with
+    /// the same identity is not created until this clears.
+    private(set) var removalPending = false
+
+    /// Other apps' normal windows currently sitting on the proxy display. They are invisible to the
+    /// user (covered by the presenter) and can block apps (e.g. a Finder alert stops shutdown).
+    var strayWindows: [TrackedWindow] {
+        guard let vd = virtualDisplay else { return [] }
+        let b = vd.bounds
+        return tracker.latest.windows.filter {
+            $0.pid != getpid() && $0.layer == 0 && $0.alpha > 0
+                && b.contains(CGPoint(x: $0.boundsPoints.midX, y: $0.boundsPoints.midY))
+        }
     }
 
     // MARK: Lifecycle
@@ -115,7 +179,6 @@ final class Pipeline {
         dispatchPrecondition(condition: .onQueue(.main))
         guard state != .running, state != .starting else { return }
         state = .starting
-        _ = presenter.attachToScreen()
         tracker.start()
         installReconfigurationCallback()
         startRerenderTimer()
@@ -146,8 +209,8 @@ final class Pipeline {
 
     private func enterWaitingForMeeting() {
         state = .waitingForWatcher
-        presentBlack()
-        Log.info("auto capture: waiting for a meeting (capture off)")
+        tearDownDisplay()
+        Log.info("auto capture: waiting for a meeting (capture off, no proxy display)")
     }
 
     /// Only valid while capture is OFF (our own stream would count): is any process recording the
@@ -206,15 +269,11 @@ final class Pipeline {
 
     /// Emergency stop: stop capture, black the proxy, and remove the virtual display. Meeting apps
     /// end a share whose source display disappears, so this ends the share from their side too.
-    /// Irreversible for this process (the display can be re-created, see App.relaunch).
+    /// "Start capturing" brings a fresh display back.
     func endShare() {
         Log.error("END SHARE requested: stopping capture and removing the virtual display")
         presentBlack()
         stop()
-        presenter.close()
-        do { let t = try virtualDisplay.release(); Log.info("virtual display removed in \(Int(t * 1000)) ms") }
-        catch { Log.error("\(error)") }
-        state = .error("Share ended: virtual display removed. Relaunch sharemask to create it again.")
     }
 
     /// Last rendered output (for the preview window).
@@ -223,10 +282,17 @@ final class Pipeline {
     private func presentBlack() {
         let size = source.geometry.pixelSize
         let black = CIImage(color: CIColor(red: 0, green: 0, blue: 0)).cropped(to: CGRect(origin: .zero, size: size))
-        renderQueue.async { self.presenter.present(black, completion: nil) }
+        renderQueue.async { self.presenter?.present(black, completion: nil) }
     }
 
     private func startCapture() async {
+        // Wait (≤ 5 s) for a previous display with the same identity to finish going away.
+        for _ in 0..<100 {
+            if !(await MainActor.run { self.removalPending }) { break }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let ok = await MainActor.run { self.bringUpDisplay() }
+        guard ok else { return }
         let cap = Capture(displayID: source.id, pixelSize: source.geometry.pixelSize)
         cap.onStopped = { [weak self] error in
             guard let self = self else { return }
@@ -279,6 +345,7 @@ final class Pipeline {
         capture = nil
         Task { await cap?.stop() }
         lock.lock(); lastFrame = nil; pending = nil; lock.unlock()
+        tearDownDisplay()
         state = .stopped
     }
 
@@ -317,6 +384,7 @@ final class Pipeline {
     /// True if the virtual display no longer has the size we created it with (someone changed its
     /// mode in System Settings). After this, teardown requires relaunch.
     var virtualDisplayModeChanged: Bool {
+        guard let virtualDisplay = virtualDisplay else { return false }
         let s = virtualDisplay.currentPixelSize
         return s.width > 0 && (Int(s.width) != Int(virtualDisplay.spec.modeWidth) || Int(s.height) != Int(virtualDisplay.spec.modeHeight))
     }
@@ -365,7 +433,7 @@ final class Pipeline {
         let regions = currentRegions()
         lock.lock(); lastRegions = regions; lock.unlock()
         let image = redactor.process(buffer, regions: regions)
-        presenter.present(image) { [clock] gpu in clock.recordGPU(seconds: gpu) }
+        presenter?.present(image) { [clock] gpu in clock.recordGPU(seconds: gpu) }
         if let dir = snapshotDirectory, !snapshotTaken, FrameClock.hostSeconds() - captureStartedAt > 2 {
             snapshotTaken = true
             let cs = CGColorSpace(name: CGColorSpace.sRGB)!
