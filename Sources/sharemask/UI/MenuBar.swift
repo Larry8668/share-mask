@@ -26,6 +26,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
         var toggleHUD: () -> Void
         var openScreenRecordingSettings: () -> Void
         var relaunch: () -> Void
+        var bringBackStrays: () -> Void
+        var removeDisplay: () -> Void
         var quit: () -> Void
     }
 
@@ -52,6 +54,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let warningLine = NSMenuItem()
     private let permissionItem = NSMenuItem()
     private let relaunchItem = NSMenuItem()
+    private let strayItem = NSMenuItem()
+    private let removeDisplayItem = NSMenuItem()
 
     init(actions: Actions) {
         self.actions = actions
@@ -61,6 +65,12 @@ final class MenuBar: NSObject, NSMenuDelegate {
         setIcon(.idle)
     }
 
+    /// Top level = essentials only. Everything else lives in submenus:
+    ///   status · warnings · [Bring back stray windows]
+    ///   Start/Stop capturing · Panic · End share now
+    ///   Masks ▸  Edit regions ▸  What others see
+    ///   Settings ▸  Troubleshooting ▸
+    ///   Quit
     private func build() {
         menu.delegate = self
         menu.autoenablesItems = false
@@ -75,6 +85,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
         relaunchItem.title = "Relaunch sharemask"
         relaunchItem.isHidden = true
         bind(relaunchItem, #selector(relaunch))
+        strayItem.isHidden = true
+        bind(strayItem, #selector(bringBackStrays))
 
         bind(startStopItem, #selector(toggleProxy))
         bind(panicItem, #selector(panic))
@@ -82,57 +94,86 @@ final class MenuBar: NSObject, NSMenuDelegate {
         bind(pickItem, #selector(pick))
         bind(pointerItem, #selector(togglePointerGuard))
         bind(hudItem, #selector(toggleHUD))
+        bind(allowlistItem, #selector(toggleAllowlist))
+        bind(previewItem, #selector(togglePreview))
+        bind(endShareItem, #selector(endShare))
+        bind(loginItem, #selector(toggleLoginItem))
+        bind(removeDisplayItem, #selector(removeDisplay))
         pointerItem.title = "Pointer guard (keep cursor off proxy)"
         hudItem.title = "Show status HUD"
+        allowlistItem.title = "Allowlist mode (mask all but allowed apps)"
+        previewItem.title = "What others see"
+        endShareItem.title = "End share now"
+        loginItem.title = "Launch at login"
+        removeDisplayItem.title = "Remove proxy display now"
 
+        // Header + essentials
         menu.addItem(statusLine)
         menu.addItem(latencyLine)
         menu.addItem(warningLine)
         menu.addItem(permissionItem)
         menu.addItem(relaunchItem)
+        menu.addItem(strayItem)
         menu.addItem(.separator())
         menu.addItem(startStopItem)
-        menu.addItem(.separator())
         menu.addItem(panicItem)
-        menu.addItem(regionsItem)
-        allowlistItem.title = "Allowlist mode (mask everything except allowed apps)"
-        bind(allowlistItem, #selector(toggleAllowlist))
-        menu.addItem(allowlistItem)
+        menu.addItem(endShareItem)
+        menu.addItem(.separator())
+
+        // Masks ▸ (rebuilt on open by updateMasks; the two toggles stay at the top)
         masksItem.title = "Masks"
         masksItem.submenu = NSMenu()
         menu.addItem(masksItem)
-        menu.addItem(.separator())
-        previewItem.title = "Show “what others see” preview"
-        bind(previewItem, #selector(togglePreview))
-        menu.addItem(previewItem)
-        endShareItem.title = "End share now (remove proxy display)"
-        bind(endShareItem, #selector(endShare))
-        menu.addItem(endShareItem)
-        menu.addItem(.separator())
-        menu.addItem(pickItem)
-        pickForItem.title = "Pick regions for app"
+
+        // Edit regions ▸
+        let edit = NSMenu()
+        pickItem.title = "Frontmost app…"
+        edit.addItem(pickItem)
+        pickForItem.title = "Choose app"
         pickForItem.submenu = NSMenu()
-        menu.addItem(pickForItem)
+        edit.addItem(pickForItem)
         configuredItem.title = "Configured apps"
         configuredItem.submenu = NSMenu()
-        menu.addItem(configuredItem)
+        edit.addItem(configuredItem)
+        edit.addItem(.separator())
+        edit.addItem(item("Open presets.json", #selector(openPresets)))
+        edit.addItem(item("Reload presets", #selector(reloadPresets)))
+        let editItem = NSMenuItem(title: "Edit regions", action: nil, keyEquivalent: "")
+        editItem.submenu = edit
+        menu.addItem(editItem)
+        menu.addItem(previewItem)
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Open presets.json", action: #selector(openPresets), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Reload presets", action: #selector(reloadPresets), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Show log file", action: #selector(openLogs), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Dump window list to log", action: #selector(dumpWindows), keyEquivalent: "").target = self
-        menu.addItem(.separator())
-        menu.addItem(pointerItem)
-        menu.addItem(hudItem)
+
+        // Settings ▸
+        let settings = NSMenu()
         hotkeysItem.title = "Shortcuts"
         hotkeysItem.submenu = NSMenu()
-        menu.addItem(hotkeysItem)
-        loginItem.title = "Launch at login"
-        bind(loginItem, #selector(toggleLoginItem))
-        menu.addItem(loginItem)
+        settings.addItem(hotkeysItem)
+        settings.addItem(loginItem)
+        settings.addItem(pointerItem)
+        settings.addItem(hudItem)
+        let settingsItem = NSMenuItem(title: "Settings", action: nil, keyEquivalent: "")
+        settingsItem.submenu = settings
+        menu.addItem(settingsItem)
+
+        // Troubleshooting ▸
+        let trouble = NSMenu()
+        trouble.addItem(removeDisplayItem)
+        trouble.addItem(item("Show log file", #selector(openLogs)))
+        trouble.addItem(item("Dump window list to log", #selector(dumpWindows)))
+        trouble.addItem(item("Relaunch sharemask", #selector(relaunch)))
+        let troubleItem = NSMenuItem(title: "Troubleshooting", action: nil, keyEquivalent: "")
+        troubleItem.submenu = trouble
+        menu.addItem(troubleItem)
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit sharemask", action: #selector(quit), keyEquivalent: "q").target = self
+        menu.addItem(item("Quit sharemask", #selector(quit), key: "q"))
         item.menu = menu
+    }
+
+    private func item(_ title: String, _ sel: Selector, key: String = "") -> NSMenuItem {
+        let mi = NSMenuItem(title: title, action: sel, keyEquivalent: key)
+        mi.target = self
+        return mi
     }
 
     private func bind(_ mi: NSMenuItem, _ sel: Selector) { mi.target = self; mi.action = sel }
@@ -158,13 +199,19 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
     func update(status: String, latency: String, warning: String?, running: Bool, panic: Bool,
                 regionsEnabled: Bool, pointerGuard: Bool, hud: Bool, hotkeys: HotkeyConfig, needsPermission: Bool,
-                needsRelaunch: Bool, allowlistMode: Bool, previewShown: Bool, launchAtLogin: Bool) {
+                needsRelaunch: Bool, allowlistMode: Bool, previewShown: Bool, launchAtLogin: Bool,
+                strayCount: Int, displayExists: Bool) {
+        strayItem.isHidden = strayCount == 0
+        strayItem.title = "⚠ Bring back \(strayCount) window\(strayCount == 1 ? "" : "s") from the hidden display"
+        removeDisplayItem.isEnabled = displayExists
+        latencyLine.isHidden = !running
         loginItem.state = launchAtLogin ? .on : .off
         relaunchItem.isHidden = !needsRelaunch
         allowlistItem.state = allowlistMode ? .on : .off
         MenuBar.setKey(allowlistItem, hotkeys.allowlist)
         previewItem.state = previewShown ? .on : .off
-        endShareItem.title = "End share now (remove proxy display)"
+        endShareItem.title = "End share now"
+        endShareItem.isEnabled = running || displayExists
         MenuBar.setKey(endShareItem, hotkeys.endShare)
         statusLine.title = status
         latencyLine.title = latency
@@ -175,10 +222,10 @@ final class MenuBar: NSObject, NSMenuDelegate {
         panicItem.title = panic ? "Panic: ON (restore)" : "Panic"
         panicItem.state = panic ? .on : .off
         MenuBar.setKey(panicItem, hotkeys.panic)
-        regionsItem.title = regionsEnabled ? "Regions: enabled" : "Regions: disabled"
+        regionsItem.title = "Per-app masks"
         regionsItem.state = regionsEnabled ? .on : .off
         MenuBar.setKey(regionsItem, hotkeys.toggle)
-        pickItem.title = "Pick region for frontmost app…"
+        pickItem.title = "Frontmost app…"
         MenuBar.setKey(pickItem, hotkeys.pick)
         pointerItem.state = pointerGuard ? .on : .off
         hudItem.state = hud ? .on : .off
@@ -211,6 +258,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
     func updateMasks(_ entries: [MaskEntry], revealHotkey: String?) {
         let m = masksItem.submenu!
         m.removeAllItems()
+        m.addItem(regionsItem)
+        m.addItem(allowlistItem)
+        m.addItem(.separator())
         let hint = NSMenuItem(title: "Hold \(Hotkeys.pretty(revealHotkey)) to reveal the frontmost app", action: nil, keyEquivalent: "")
         hint.isEnabled = false
         m.addItem(hint)
@@ -322,6 +372,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
     @objc private func toggleHUD() { actions.toggleHUD() }
     @objc private func openPermission() { actions.openScreenRecordingSettings() }
     @objc private func relaunch() { actions.relaunch() }
+    @objc private func bringBackStrays() { actions.bringBackStrays() }
+    @objc private func removeDisplay() { actions.removeDisplay() }
     @objc private func quit() { actions.quit() }
 
     var onMenuWillOpen: (() -> Void)?

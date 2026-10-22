@@ -93,25 +93,31 @@ Screen & System Audio Recording). If macOS asks for a relaunch, use *Relaunch sh
 
 Menu bar icon: grey = stopped, green = proxy active, red = PANIC, yellow = error (hover for details).
 
+The menu keeps the essentials on top; everything else is one level down.
+
 | Menu item | Default hotkey | What it does |
 |---|---|---|
+| Start / Stop capturing | | Creates the “sharemask” display and starts capture, or stops and removes it. |
 | Panic | ⌘⇧⌃B | Pixellates the **whole** feed on the next frame (≤ 17 ms). Press again to restore. |
-| Regions: enabled/disabled | ⌘⇧⌃M | Turns per-app regions on/off (panic unaffected). |
-| Hold to reveal | ⌘⇧⌃R (hold) | Shows the frontmost app unmasked while the key is held. |
-| Allowlist mode | ⌘⇧⌃A | Masks everything except the `allowlist` apps. |
 | End share now | ⌘⇧⌃X | Removes the “sharemask” display, which ends the share in your call app. |
-| Masks ▸ | | Tick/untick individual apps, regions, rules and notification masking for this session. |
-| Show “what others see” preview | | Small floating window with the live proxy output (never captured). |
-| Pick region for frontmost app… | ⌘⇧⌃P | Opens the **region editor** over the frontmost window. |
-| Pick regions for app ▸ | | Same editor for any running app. |
-| Configured apps ▸ | | Edit or remove the regions of each app in presets.json. |
-| Start/Stop capturing | | Forces capture on/off (the virtual display stays until quit). |
-| Show log file | | Reveals `~/Library/Logs/sharemask/sharemask.log`. |
-| Shortcuts ▸ | | Remap any shortcut: pick it, press the new keys. Stored in presets.json. |
-| Launch at login | | Registers the app as a login item (use it from the installed copy in Applications). |
-| Open presets.json / Reload | | Config lives at `~/.config/sharemask/presets.json`, live-reloaded. |
-| Pointer guard | | Warps the cursor back if it wanders onto the virtual display (default on). |
-| Show status HUD | | Small "● sharing-safe / PANIC" panel on your real display; never captured. |
+| Masks ▸ | ⌘⇧⌃M, ⌘⇧⌃A | Per-app masks on/off, allowlist mode, and ticks for each app, region, rule and notification masking (session only). Hold ⌘⇧⌃R to reveal the frontmost app. |
+| Edit regions ▸ | ⌘⇧⌃P | Region editor for the frontmost app or any running app, configured apps (edit/remove), presets.json. |
+| What others see | | Floating preview of the live proxy output (never captured). |
+| Settings ▸ | | Shortcuts (press-to-remap), Launch at login, Pointer guard, status HUD. |
+| Troubleshooting ▸ | | Remove proxy display now, show log file, dump window list, relaunch. |
+| ⚠ Bring back N windows… | | Appears only if another app put a window on the hidden display. |
+
+### The proxy display exists only while capturing
+The “sharemask” display is created when capture starts (you accept the meeting prompt or press
+Start) and removed when it stops. Outside meetings there is no extra screen at all.
+
+While it exists, macOS treats it as a real monitor: apps can open windows on it and macOS restores
+windows onto it when it reappears. Those windows would be invisible to you (a Finder error dialog
+hidden there once stopped a Mac from shutting down). sharemask watches for this every second:
+
+- With **Accessibility** permission (optional, asked the first time it happens) it moves such
+  windows back to your real screen automatically.
+- Without it, it tells you and offers to remove the display, which makes macOS move them home.
 
 ### Region editor
 A transparent overlay sits exactly over the app's window (and follows it if it moves). Drag on
@@ -222,7 +228,11 @@ Encoded in `VirtualDisplay.swift`; measured on macOS 27.0.1 with `make probe`:
    process (`sharemask --probe <id>`). `CGDisplayBounds`/`CGDisplayPixelsWide` work regardless.
 5. Removal is asynchronous (measured 20–100 ms for one display); `release()` polls up to 5 s.
 6. The window server reclaims the display if the process dies; it is still released on quit.
-7. Created at the real display's pixel size with a ~110 DPI physical size, so macOS enters the
+7. Created on demand (when capture starts), after AppKit has enumerated displays, so
+   `CGDisplayCopyDisplayMode` is NULL for it inside the app; nothing in the app needs it. Released
+   asynchronously from the main run loop: the process's display list only refreshes when the main
+   run loop turns, so a blocking poll on the main thread always times out.
+8. Created at the real display's pixel size with a ~110 DPI physical size, so macOS enters the
    native 1× mode. With a Retina-like DPI it would come up at half size. Note that
    `CGDisplayPixelsWide` returns *points* on Retina displays; the pixel size is read from the mode.
 

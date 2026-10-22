@@ -4,10 +4,11 @@ import AppKit
 /// point on the source display. Global monitors for mouse movement don't need Accessibility.
 final class PointerGuard {
     private var monitors: [Any] = []
-    let virtualDisplayID: CGDirectDisplayID
+    /// Looked up on every check: the proxy display comes and goes.
+    let virtualDisplayID: () -> CGDirectDisplayID?
     let sourceDisplayID: CGDirectDisplayID
 
-    init(virtualDisplayID: CGDirectDisplayID, sourceDisplayID: CGDirectDisplayID) {
+    init(virtualDisplayID: @escaping () -> CGDirectDisplayID?, sourceDisplayID: CGDirectDisplayID) {
         self.virtualDisplayID = virtualDisplayID
         self.sourceDisplayID = sourceDisplayID
     }
@@ -31,7 +32,8 @@ final class PointerGuard {
     }
 
     private func check() {
-        let vb = CGDisplayBounds(virtualDisplayID)
+        guard let id = virtualDisplayID() else { return }
+        let vb = CGDisplayBounds(id)
         guard vb.width > 0 else { return }
         // NSEvent.mouseLocation is AppKit (bottom-left of primary); convert to CG (top-left).
         let loc = NSEvent.mouseLocation

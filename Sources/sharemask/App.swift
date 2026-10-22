@@ -32,24 +32,23 @@ enum Main {
 /// Result of the pre-AppKit launch step.
 struct Launch {
     var source: SourceDisplay
-    var virtualDisplay: VirtualDisplay?
+    var spec: VirtualDisplay.Spec
     var error: String?
 
+    /// Verifies the private API and computes the proxy display spec. The display itself is created
+    /// on demand by the pipeline when capture starts (so no hidden screen exists outside meetings).
+    /// Consequence of creating it after AppKit enumerated displays: CGDisplayCopyDisplayMode returns
+    /// NULL for it in this process. Nothing here needs it (bounds/pixels still work; --probe <id>
+    /// runs as a child process).
     static func createVirtualDisplayEarly() -> Launch {
         let source = SourceDisplay.current()
-        do {
-            try VirtualDisplay.checkAPI()
-        } catch {
-            return Launch(source: source, virtualDisplay: nil, error: "\(error)")
-        }
         let spec = VirtualDisplay.Spec.forSource(pixelsWide: Int(source.geometry.pixelSize.width),
                                                  pixelsHigh: Int(source.geometry.pixelSize.height))
         do {
-            let vd = try VirtualDisplay.create(spec: spec)
-            Log.info("virtual display \(vd.displayID) created: \(spec.modeWidth)x\(spec.modeHeight) serial \(spec.serial)")
-            return Launch(source: source, virtualDisplay: vd, error: nil)
+            try VirtualDisplay.checkAPI()
+            return Launch(source: source, spec: spec, error: nil)
         } catch {
-            return Launch(source: source, virtualDisplay: nil, error: "\(error)")
+            return Launch(source: source, spec: spec, error: "\(error)")
         }
     }
 }
@@ -106,6 +105,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
             },
             relaunch: { [weak self] in self?.relaunch() },
+            bringBackStrays: { [weak self] in self?.bringBackStrays() },
+            removeDisplay: { [weak self] in self?.bringBackStrays(forceRemove: true) },
             quit: { NSApp.terminate(nil) }))
         menuBar.onMenuWillOpen = { [weak self] in self?.refreshMenu(); self?.refreshAppMenus() }
 
@@ -119,8 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             refreshMenu()
             return
         }
-        guard let vd = launch.virtualDisplay else { return }
-        let p = Pipeline(virtualDisplay: vd, source: launch.source, tracker: tracker)
+        let p = Pipeline(displaySpec: launch.spec, source: launch.source, tracker: tracker)
         p.config = config.config
         p.captureMode = Pipeline.CaptureMode(rawValue: config.config.captureMode) ?? .ask
         let mc = MeetingCoordinator(pipeline: p)
@@ -139,11 +139,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.preview.update(img, status: "\(p.panic ? "PANIC · " : "")\(self.options.allowlistMode ? "allowlist · " : "")\(p.clock.summary().fps.rounded()) fps")
         }
         pipeline = p
-        pointerGuard = PointerGuard(virtualDisplayID: vd.displayID, sourceDisplayID: launch.source.id)
+        pointerGuard = PointerGuard(virtualDisplayID: { [weak p] in p?.virtualDisplay?.displayID }, sourceDisplayID: launch.source.id)
+        p.onDisplayChange = { [weak self] up in
+            if !up { self?.promptedStrayIDs.removeAll(); self?.strayCount = 0 }
+            self?.refreshMenu()
+            if up { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self?.checkStrays() } }
+        }
         p.start()
         meetings?.start()
 
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refreshMenu() }
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.checkStrays(); self?.refreshMenu() }
         refreshMenu()
         if ProcessInfo.processInfo.environment["SHAREMASK_DUMP_WINDOWS"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.dumpWindows() }
@@ -153,13 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         meetings?.stop()
         hotkeys.unregisterAll()
-        pipeline?.stop()
-        if let vd = launch.virtualDisplay {
-            do {
-                let t = try vd.release()
-                Log.info("virtual display released in \(Int(t * 1000)) ms")
-            } catch { Log.warn("\(error)") }
-        }
+        pipeline?.stop()          // also removes the proxy display if it exists
     }
 
     // MARK: Config
@@ -409,13 +408,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             running = p.state.isRunning
             panic = p.panic
             regions = p.regionsEnabled
-            let out = p.presenter.outputPixelSize
+            let out = p.presenter?.outputPixelSize ?? .zero
             switch p.state {
-            case .idle, .stopped: status = "Proxy display: created, capture stopped"; menuBar.setIcon(.idle)
-            case .starting: status = "Proxy display: starting…"; menuBar.setIcon(.idle)
-            case .waitingForWatcher: status = "Standby — \(meetings?.statusText ?? "capture off") · click Start to capture now"; menuBar.setIcon(.idle)
+            case .idle, .stopped: status = "Stopped — no proxy display"; menuBar.setIcon(.idle)
+            case .starting: status = "Starting proxy display…"; menuBar.setIcon(.idle)
+            case .waitingForWatcher: status = "Standby — \(meetings?.statusText ?? "no meeting")"; menuBar.setIcon(.idle)
             case .running:
-                status = "Sharing-safe: share display “sharemask” (\(Int(out.width))×\(Int(out.height)))"
+                status = "Ready — share the “sharemask” display (\(Int(out.width))×\(Int(out.height)))"
                 menuBar.setIcon(panic ? .panic : .active)
                 latency = "Latency: \(p.clock.summary())"
             case .error(let e):
@@ -439,7 +438,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                        regionsEnabled: regions, pointerGuard: pointerGuardEnabled, hud: hudEnabled,
                        hotkeys: config.config.hotkeys, needsPermission: permissionMissing,
                        needsRelaunch: pipeline?.needsRelaunch ?? false, allowlistMode: options.allowlistMode,
-                       previewShown: preview.isVisible, launchAtLogin: launchAtLogin)
+                       previewShown: preview.isVisible, launchAtLogin: launchAtLogin,
+                       strayCount: strayCount, displayExists: pipeline?.virtualDisplay != nil)
     }
 
     /// Quit and start a fresh instance (needed after Screen Recording is granted to a running app).
@@ -452,7 +452,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
-    private func vdSafe(_ p: Pipeline) -> Bool { p.virtualDisplay.isSafeToPresent }
+    private func vdSafe(_ p: Pipeline) -> Bool { p.virtualDisplay?.isSafeToPresent ?? true }
+
+    // MARK: Stray windows on the proxy display
+
+    private var strayCount = 0
+    private var promptedStrayIDs: Set<CGWindowID> = []
+
+    /// Runs every second (and right after the display appears). Auto-moves stray windows home when
+    /// Accessibility is granted; otherwise surfaces them in the menu and asks once per window.
+    private func checkStrays() {
+        guard let p = pipeline else { return }
+        let strays = p.strayWindows
+        if strays.count != strayCount {
+            Log.info("stray windows on proxy display: \(strayCount) → \(strays.count) (display \(p.virtualDisplay.map { "\($0.displayID)" } ?? "none"), tracker \(p.tracker.latest.windows.count) windows, AX \(WindowEvacuator.isTrusted))")
+        }
+        strayCount = strays.count
+        guard !strays.isEmpty else { return }
+        let home = CGDisplayBounds(launch.source.id).insetBy(dx: 40, dy: 60)
+        if WindowEvacuator.isTrusted {
+            WindowEvacuator.evacuate(strays, into: home)
+            return
+        }
+        let fresh = strays.filter { !promptedStrayIDs.contains($0.windowID) }
+        guard !fresh.isEmpty, !alerts.isVisible else { return }
+        fresh.forEach { promptedStrayIDs.insert($0.windowID) }
+        let names = Set(strays.compactMap { w in w.bundleID.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0).first?.localizedName } })
+        Log.warn("stray windows on proxy display: \(strays.map { "\($0.bundleID ?? "?")#\($0.windowID)" })")
+        alerts.show(title: "\(names.sorted().joined(separator: ", ")) opened a window on the hidden sharemask display",
+                    detail: "You can't see it there. Allow sharemask to move such windows back automatically (Accessibility), or remove the display now (ends a share in progress).",
+                    primary: "Allow auto-move", secondary: "Remove display", timeout: 60,
+                    onPrimary: { WindowEvacuator.requestTrust() },
+                    onSecondary: { [weak self] in self?.bringBackStrays(forceRemove: true) })
+    }
+
+    /// Menu action. Moves windows home if allowed; otherwise removes the display (macOS then moves
+    /// them home itself). Capture resumes later through the normal meeting flow / Start.
+    private func bringBackStrays(forceRemove: Bool = false) {
+        guard let p = pipeline else { return }
+        if !forceRemove && WindowEvacuator.isTrusted {
+            let n = WindowEvacuator.evacuate(p.strayWindows, into: CGDisplayBounds(launch.source.id).insetBy(dx: 40, dy: 60))
+            Log.info("bring back: moved \(n) window(s)")
+        } else {
+            Log.info("bring back: removing proxy display so macOS returns its windows")
+            if p.state.isRunning || p.state == .starting { meetings?.userStoppedManually() }
+            p.tearDownDisplay()
+        }
+        refreshMenu()
+    }
 
     // MARK: Alerts
 

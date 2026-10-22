@@ -136,6 +136,25 @@ final class VirtualDisplay {
         throw Error.removalTimedOut(displayID)
     }
 
+    /// Non-blocking release for app (AppKit) use. The process's view of the active display list
+    /// only refreshes when the main run loop turns, so polling it while blocking the main thread
+    /// (as `release()` does) never sees the display go and always times out. This polls from the
+    /// main run loop instead. `completion(seconds)` is nil on timeout. Main thread.
+    func releaseAsync(timeout: TimeInterval = 5, completion: @escaping (TimeInterval?) -> Void) {
+        guard let h = handle else { completion(0); return }
+        let start = Date()
+        h.invalidate()
+        handle = nil
+        let id = displayID
+        func poll() {
+            let t = Date().timeIntervalSince(start)
+            if !VirtualDisplay.isActive(id) { completion(t); return }
+            if t > timeout { completion(nil); return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: poll)
+        }
+        DispatchQueue.main.async(execute: poll)
+    }
+
     /// FNV-1a over "name:w:h" — stable across launches and machines (invariant 3).
     static func stableSerial(name: String, w: Int, h: Int) -> UInt32 {
         var hash: UInt32 = 2166136261
