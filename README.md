@@ -1,5 +1,7 @@
 # sharemask
 
+![Your screen stays untouched; the call sees the chat list pixellated](docs/demo.png)
+
 **Share your screen without sharing your chats.** sharemask is a macOS menu-bar app that lets you
 screen-share in Zoom, Meet, Teams, Slack or FaceTime while the parts you choose (the WhatsApp chat
 list, a Slack sidebar, every notification banner, or everything except the one app you're

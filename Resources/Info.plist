@@ -4,6 +4,8 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>sharemask</string>
 	<key>CFBundleExecutable</key>
 	<string>sharemask</string>
 	<key>CFBundleIdentifier</key>
@@ -12,26 +14,24 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>sharemask</string>
-	<key>CFBundleDisplayName</key>
-	<string>sharemask</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.1.1</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Optional: sharemask reads upcoming events so it can offer to start the proxy display before a video call begins.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>sharemask captures your real display so it can show a redacted copy on the "sharemask" virtual display, which is the one you share in video calls.</string>
-	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Optional: sharemask reads upcoming events so it can offer to start the proxy display before a video call begins.</string>
 	<key>NSSupportsAutomaticTermination</key>
 	<false/>
 	<key>NSSupportsSuddenTermination</key>
