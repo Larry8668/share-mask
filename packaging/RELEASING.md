@@ -1,5 +1,8 @@
 # Releasing
 
+`main` is protected: changes land through pull requests (no approvals required, applies to admins
+too; force-pushes and deletion are blocked). Do the version bump below on a branch and merge a PR.
+
 1. Bump `CFBundleShortVersionString` in `Resources/Info.plist`.
 2. `make release` → `build/sharemask-<version>.zip` and its sha256.
 3. `gh release create v<version> build/sharemask-<version>.zip --title "sharemask <version>" --notes "..."`
