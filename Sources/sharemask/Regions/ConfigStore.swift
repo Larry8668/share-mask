@@ -139,6 +139,18 @@ final class ConfigStore {
         try data.write(to: ConfigStore.fileURL, options: .atomic)
     }
 
+    /// Writes one hotkey (empty string = unbound) into presets.json; live reload re-registers it.
+    func setHotkey(_ name: String, combo: String) throws {
+        var root: [String: Any] = [:]
+        if let data = try? Data(contentsOf: ConfigStore.fileURL),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { root = obj }
+        var hk = root["hotkeys"] as? [String: Any] ?? [:]
+        hk[name] = combo
+        root["hotkeys"] = hk
+        let out = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
+        try out.write(to: ConfigStore.fileURL, options: .atomic)
+    }
+
     func removeApp(bundleID: String) throws {
         guard let data = try? Data(contentsOf: ConfigStore.fileURL),
               var root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

@@ -47,6 +47,10 @@ final class Pipeline {
     /// Main thread. Called with the last rendered output for the preview window (~10 Hz).
     var onPreview: ((CIImage) -> Void)?
     private var lastPreviewAt: Double = 0
+    /// Debug/demo: when set, the first frame ≥ 2 s after capture start is saved as raw.png + proxy.png.
+    var snapshotDirectory: URL?
+    private var snapshotTaken = false
+    private var captureStartedAt: Double = 0
     private var lastFrame: CVPixelBuffer?
     private var lastPTS = CMTime.zero
     private var lastRegions: [PixelRegion] = []
@@ -232,6 +236,7 @@ final class Pipeline {
             try await cap.start { [weak self] buffer, pts in self?.ingest(buffer, pts) }
             capture = cap
             restartAttempts = 0
+            captureStartedAt = FrameClock.hostSeconds()
             DispatchQueue.main.async { self.state = .running }
         } catch {
             DispatchQueue.main.async {
@@ -361,6 +366,14 @@ final class Pipeline {
         lock.lock(); lastRegions = regions; lock.unlock()
         let image = redactor.process(buffer, regions: regions)
         presenter.present(image) { [clock] gpu in clock.recordGPU(seconds: gpu) }
+        if let dir = snapshotDirectory, !snapshotTaken, FrameClock.hostSeconds() - captureStartedAt > 2 {
+            snapshotTaken = true
+            let cs = CGColorSpace(name: CGColorSpace.sRGB)!
+            let raw = CIImage(cvPixelBuffer: buffer)
+            try? redactor.context.writePNGRepresentation(of: raw, to: dir.appendingPathComponent("raw.png"), format: .RGBA8, colorSpace: cs)
+            try? redactor.context.writePNGRepresentation(of: image, to: dir.appendingPathComponent("proxy.png"), format: .RGBA8, colorSpace: cs)
+            Log.info("snapshot written to \(dir.path) (\(regions.count) regions)")
+        }
         clock.recordPresented(samplePTS: pts, callbackEntry: entry)
         lock.lock()
         lastOutput = image

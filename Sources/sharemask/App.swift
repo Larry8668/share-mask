@@ -66,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var picker: RegionPicker?
     private var meetings: MeetingCoordinator?
     private let preview = PreviewWindow()
+    private let recorder = HotkeyRecorder()
     private let alerts = PromptPanel()
     private var options = ResolveOptions() { didSet { pipeline?.options = options; refreshMenu(); updateHUD() } }
     private var refreshTimer: Timer?
@@ -93,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             togglePreview: { [weak self] in self?.togglePreview() },
             endShare: { [weak self] in self?.endShare(confirm: true) },
             dumpWindows: { [weak self] in self?.dumpWindows() },
+            changeHotkey: { [weak self] name in self?.changeHotkey(name) },
             openPresets: { NSWorkspace.shared.open(ConfigStore.fileURL) },
             openLogs: { NSWorkspace.shared.activateFileViewerSelecting([Log.fileURL]) },
             reloadPresets: { [weak self] in self?.config.reload() },
@@ -127,6 +129,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if demo { p.setDemoRegions([CGRect(x: 100, y: 100, width: 400, height: 300)]) }
         p.onStateChange = { [weak self] _ in self?.refreshMenu() }
         p.onStall = { [weak self] msg in self?.stallAlert(msg) }
+        var snapDir = ProcessInfo.processInfo.environment["SHAREMASK_SNAPSHOT"]
+        if let i = CommandLine.arguments.firstIndex(of: "--snapshot"), i + 1 < CommandLine.arguments.count { snapDir = CommandLine.arguments[i + 1] }
+        if let dir = snapDir { p.snapshotDirectory = URL(fileURLWithPath: dir) }
         p.onPreview = { [weak self] img in
             guard let self = self, let p = self.pipeline else { return }
             self.preview.update(img, status: "\(p.panic ? "PANIC · " : "")\(self.options.allowlistMode ? "allowlist · " : "")\(p.clock.summary().fps.rounded()) fps")
@@ -289,6 +294,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     onPrimary: { [weak self] in self?.endShare(confirm: false) }, onSecondary: {})
     }
 
+    private func changeHotkey(_ name: String) {
+        let hk = config.config.hotkeys
+        let current: String? = ["panic": hk.panic, "toggle": hk.toggle, "pick": hk.pick, "reveal": hk.reveal,
+                                "allowlist": hk.allowlist, "endShare": hk.endShare][name] ?? nil
+        let title = MenuBar.hotkeyNames.first { $0.0 == name }?.1 ?? name
+        recorder.record(actionName: title, current: current) { [weak self] combo in
+            guard let self = self, let combo = combo else { return }
+            do {
+                try self.config.setHotkey(name, combo: combo)
+                Log.info("hotkey \(name) → '\(combo)'")
+            } catch { self.alert("Could not save presets.json", "\(error)") }
+        }
+    }
+
     private func dumpWindows() {
         var cache: [pid_t: String?] = [:]
         let list = WindowTracker.copyOnScreenWindows(bundleCache: &cache)
@@ -353,6 +372,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         menuBar.updateApps(running: running, configured: configured)
         menuBar.updateMasks(masksEntries(), revealHotkey: config.config.hotkeys.reveal)
+        menuBar.updateHotkeys(config.config.hotkeys)
     }
 
     // MARK: Menu refresh

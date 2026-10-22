@@ -20,6 +20,28 @@ presenting) are pixellated **only on the shared feed**. Your own screen stays ex
 macOS 14+ (built and measured on macOS 27.0.1), Apple Silicon, Swift 5.9+/SwiftPM. Not sandboxed,
 not notarised, uses private CoreGraphics API. Single user, single machine.
 
+## Install
+
+Requires macOS 14 or later on Apple Silicon.
+
+**Homebrew**
+
+```sh
+brew tap Larry8668/sharemask
+brew trust Larry8668/sharemask     # Homebrew 7+: third-party taps must be trusted
+brew install --cask sharemask
+```
+
+**Manual**: download `sharemask-<version>.zip` from the
+[releases page](https://github.com/Larry8668/share-mask/releases), unzip, move `sharemask.app` to
+Applications, then right-click → Open the first time (the app is signed but not notarised).
+
+**From source**: `make identity && make run` (see Build below).
+
+First launch: grant **Screen Recording** when asked (System Settings → Privacy & Security → Screen &
+System Audio Recording), then relaunch if macOS asks you to. The app lives in the menu bar as a
+crossed-eye icon; in your call app, share the display named **sharemask**.
+
 ## How it works
 
 macOS offers no "visible to capture but invisible locally" window. So sharemask is a **proxy display**:
@@ -83,6 +105,7 @@ Menu bar icon: grey = stopped, green = proxy active, red = PANIC, yellow = error
 | Configured apps ▸ | | Edit or remove the regions of each app in presets.json. |
 | Start/Stop capturing | | Forces capture on/off (the virtual display stays until quit). |
 | Show log file | | Reveals `~/Library/Logs/sharemask/sharemask.log`. |
+| Shortcuts ▸ | | Remap any shortcut: pick it, press the new keys. Stored in presets.json. |
 | Open presets.json / Reload | | Config lives at `~/.config/sharemask/presets.json`, live-reloaded. |
 | Pointer guard | | Warps the cursor back if it wanders onto the virtual display (default on). |
 | Show status HUD | | Small "● sharing-safe / PANIC" panel on your real display; never captured. |
@@ -214,16 +237,6 @@ Targets: < 40 ms p95 capture→present, < 4 ms GPU per frame on Apple Silicon.
 Measured on an M-series MacBook at 2940×1912 (macOS 27.0.1): capture→present 4 ms p50 / 6–17 ms p95,
 pipeline 2.6 ms, GPU 1.3–1.5 ms. The fps figure follows screen activity: ScreenCaptureKit only
 delivers frames when content changes, so a static desktop reads ~8–10 fps and rises to 60 under motion.
-
-## Install via Homebrew (once a release exists)
-
-```sh
-brew tap Larry8668/sharemask
-brew trust Larry8668/sharemask     # Homebrew 7+: third-party taps must be trusted
-brew install --cask sharemask
-```
-
-The cask lives in `packaging/`; see `packaging/RELEASING.md`.
 
 ## Other platforms
 

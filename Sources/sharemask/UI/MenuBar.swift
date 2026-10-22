@@ -17,6 +17,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         var togglePreview: () -> Void
         var endShare: () -> Void
         var dumpWindows: () -> Void
+        var changeHotkey: (String) -> Void        // hotkey name in presets.json
         var openPresets: () -> Void
         var openLogs: () -> Void
         var reloadPresets: () -> Void
@@ -41,6 +42,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let allowlistItem = NSMenuItem()
     private let previewItem = NSMenuItem()
     private let endShareItem = NSMenuItem()
+    private let hotkeysItem = NSMenuItem()
     private let pointerItem = NSMenuItem()
     private let hudItem = NSMenuItem()
     private let statusLine = NSMenuItem()
@@ -120,6 +122,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(pointerItem)
         menu.addItem(hudItem)
+        hotkeysItem.title = "Shortcuts"
+        hotkeysItem.submenu = NSMenu()
+        menu.addItem(hotkeysItem)
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit sharemask", action: #selector(quit), keyEquivalent: "q").target = self
         item.menu = menu
@@ -213,6 +218,32 @@ final class MenuBar: NSObject, NSMenuDelegate {
             mi.indentationLevel = e.key.contains("/") ? 1 : 0
             m.addItem(mi)
         }
+    }
+
+    static let hotkeyNames: [(String, String)] = [("panic", "Panic"), ("toggle", "Toggle regions"), ("pick", "Pick regions"),
+                                                  ("reveal", "Hold to reveal"), ("allowlist", "Allowlist mode"), ("endShare", "End share")]
+
+    func updateHotkeys(_ hotkeys: HotkeyConfig) {
+        let m = hotkeysItem.submenu!
+        m.removeAllItems()
+        let values: [String: String?] = ["panic": hotkeys.panic, "toggle": hotkeys.toggle, "pick": hotkeys.pick,
+                                         "reveal": hotkeys.reveal, "allowlist": hotkeys.allowlist, "endShare": hotkeys.endShare]
+        for (key, title) in MenuBar.hotkeyNames {
+            let combo = values[key] ?? nil
+            let shown = (combo?.isEmpty ?? true) ? "unbound" : Hotkeys.pretty(combo)
+            let mi = NSMenuItem(title: "\(title): \(shown)   — change…", action: #selector(changeHotkey(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = key
+            m.addItem(mi)
+        }
+        m.addItem(.separator())
+        let hint = NSMenuItem(title: "Stored in presets.json → \"hotkeys\"", action: nil, keyEquivalent: "")
+        hint.isEnabled = false
+        m.addItem(hint)
+    }
+
+    @objc private func changeHotkey(_ sender: NSMenuItem) {
+        if let key = sender.representedObject as? String { actions.changeHotkey(key) }
     }
 
     @objc private func toggleMask(_ sender: NSMenuItem) {
