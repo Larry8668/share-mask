@@ -219,7 +219,8 @@ delivers frames when content changes, so a static desktop reads ~8–10 fps and 
 
 ```sh
 brew tap Larry8668/sharemask
-brew install --cask --no-quarantine sharemask
+brew trust Larry8668/sharemask     # Homebrew 7+: third-party taps must be trusted
+brew install --cask sharemask
 ```
 
 The cask lives in `packaging/`; see `packaging/RELEASING.md`.

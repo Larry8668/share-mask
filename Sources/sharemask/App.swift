@@ -108,6 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         config.onChange = { [weak self] cfg in self?.applyConfig(cfg) }
         config.onError = { [weak self] _ in self?.refreshMenu() }
         config.start()
+        RunLoop.main.run(until: Date())   // deliver the initial onChange before building the pipeline
 
         if let err = launch.error {
             showFatal(err)

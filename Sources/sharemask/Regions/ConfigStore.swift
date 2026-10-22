@@ -20,7 +20,9 @@ final class ConfigStore {
 
     func start() {
         ensureFileExists()
-        reload()
+        // First load is synchronous so hotkeys, capture mode and masks are correct before the
+        // pipeline starts (callbacks still arrive on the main queue, so drain them explicitly).
+        queue.sync { reloadSync() }
         watch()
     }
 
