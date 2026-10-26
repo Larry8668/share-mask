@@ -108,6 +108,18 @@ The menu keeps the essentials on top; everything else is one level down.
 | ⚠ Bring back N windows… | | Appears only if another app put a window on the hidden display. |
 | sharemask 0.1.x ▸ | | Version and update status. **Check for updates now**, release notes, copy the update command, and **Update now** when a newer release exists (runs `brew upgrade --cask sharemask` in Terminal and relaunches). |
 
+### Multiple monitors
+With more than one screen connected, the menu shows **Share screen: <name> ▸** and the meeting
+prompt has a screen picker; the proxy display is sized to whichever screen you pick, and the
+choice is remembered.
+
+macOS places a new display next to the existing ones, sometimes *between* two real screens. The
+first time that happens for a given monitor setup, sharemask moves the proxy display to a corner
+where it touches your screens only diagonally (using a short-lived helper process, because moving
+it from the app itself would make it impossible to remove until quit). macOS remembers that spot
+for next time. If placement ever fails, the pointer guard switches itself off rather than block
+your cursor.
+
 ### The proxy display exists only while capturing
 The “sharemask” display is created when capture starts (you accept the meeting prompt or press
 Start) and removed when it stops. Outside meetings there is no extra screen at all.

@@ -9,9 +9,16 @@ final class PromptPanel {
     private var onPrimary: (() -> Void)?
     private var onSecondary: (() -> Void)?
 
+    private var chooser: NSPopUpButton?
+    private var onChoice: ((Int) -> Void)?
+
+    /// `choices` adds a pop-up (e.g. which screen to share) whose selection is reported through
+    /// `onChoice` before `onPrimary` runs.
     func show(title: String, detail: String, primary: String, secondary: String, timeout: TimeInterval = 90,
+              choices: [String]? = nil, selected: Int = 0, onChoice: ((Int) -> Void)? = nil,
               onPrimary: @escaping () -> Void, onSecondary: @escaping () -> Void) {
         dismiss()
+        self.onChoice = onChoice
         self.onPrimary = onPrimary
         self.onSecondary = onSecondary
 
@@ -54,6 +61,17 @@ final class PromptPanel {
         b1.frame.origin = NSPoint(x: width - 16 - b1.frame.width, y: 8)
         b2.frame.origin = NSPoint(x: b1.frame.minX - 8 - b2.frame.width, y: 8)
         [icon, t, d, b1, b2].forEach { bg.addSubview($0) }
+        if let choices = choices, choices.count > 1 {
+            let pop = NSPopUpButton(frame: .zero, pullsDown: false)
+            pop.addItems(withTitles: choices)
+            pop.selectItem(at: max(0, min(selected, choices.count - 1)))
+            pop.sizeToFit()
+            pop.frame.size.width = min(pop.frame.width, b2.frame.minX - 54 - 8)
+            pop.frame.origin = NSPoint(x: 54, y: 8)
+            pop.toolTip = "Which screen to share"
+            bg.addSubview(pop)
+            chooser = pop
+        }
         p.contentView = bg
 
         // Top-centre of the main (real) display, just under the menu bar.
@@ -73,9 +91,12 @@ final class PromptPanel {
         dismissTimer?.invalidate(); dismissTimer = nil
         panel?.orderOut(nil)
         panel = nil
-        onPrimary = nil; onSecondary = nil
+        onPrimary = nil; onSecondary = nil; onChoice = nil; chooser = nil
     }
 
-    @objc private func primaryTapped() { let h = onPrimary; dismiss(); h?() }
+    @objc private func primaryTapped() {
+        if let c = chooser { onChoice?(c.indexOfSelectedItem) }
+        let h = onPrimary; dismiss(); h?()
+    }
     @objc private func secondaryTapped() { let h = onSecondary; dismiss(); h?() }
 }

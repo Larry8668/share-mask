@@ -18,10 +18,13 @@ enum Probe {
         var dpi = 110.0
         var hold = 2.0
         var single: CGDirectDisplayID?
+        var origin: CGPoint?
+        var placeOnly = false
 
         while let a = args.popFirst() {
             switch a {
             case "--no-create": create = false
+            case "--place": placeOnly = true; hold = 0.3
             case "--windows":
                 var cache: [pid_t: String?] = [:]
                 for w in WindowTracker.copyOnScreenWindows(bundleCache: &cache) {
@@ -34,6 +37,20 @@ enum Probe {
             case "--hold": hold = Double(args.popFirst() ?? "") ?? hold
             case "--mode": mode = parseSize(args.popFirst())
             case "--max": maxPx = parseSize(args.popFirst())
+            case "--move":
+                // --move <displayID> X,Y : only reconfigure an existing display's origin, then exit.
+                let id = UInt32(args.popFirst() ?? "") ?? 0
+                let parts = (args.popFirst() ?? "").split(separator: ",").compactMap { Double($0) }
+                guard parts.count == 2 else { print("usage: --move ID X,Y"); return 2 }
+                var cfg: CGDisplayConfigRef?
+                CGBeginDisplayConfiguration(&cfg)
+                CGConfigureDisplayOrigin(cfg, id, Int32(parts[0]), Int32(parts[1]))
+                let r = CGCompleteDisplayConfiguration(cfg, .permanently)
+                print("move \(id) -> \(parts): \(r.rawValue == 0 ? "ok" : "error \(r.rawValue)")")
+                return 0
+            case "--origin":
+                let parts = (args.popFirst() ?? "").split(separator: ",").compactMap { Double($0) }
+                if parts.count == 2 { origin = CGPoint(x: parts[0], y: parts[1]) }
             default:
                 if let id = UInt32(a) { single = id } else { print("unknown probe option \(a)"); return 2 }
             }
@@ -73,6 +90,20 @@ enum Probe {
         do { vd = try VirtualDisplay.create(spec: spec) } catch { print("create failed: \(error)"); return 1 }
         print("created id=\(vd.displayID) in \(ms(t0)) ms, reportedHiDPI=\(vd.reportedHiDPI)")
 
+        if let o = origin {
+            Thread.sleep(forTimeInterval: 0.5)
+            var cfg: CGDisplayConfigRef?
+            CGBeginDisplayConfiguration(&cfg)
+            CGConfigureDisplayOrigin(cfg, vd.displayID, Int32(o.x), Int32(o.y))
+            let r = CGCompleteDisplayConfiguration(cfg, .permanently)
+            print("moved virtual display to \(o): \(r.rawValue == 0 ? "ok" : "error \(r.rawValue)")")
+            if placeOnly {
+                // The move pins the display to this process; exiting is what releases it, and
+                // macOS keeps the new position for the next display with this identity.
+                Thread.sleep(forTimeInterval: hold)
+                return r.rawValue == 0 ? 0 : 1
+            }
+        }
         Thread.sleep(forTimeInterval: hold)
         print("\n== active displays (after) ==")
         activeDisplays().forEach { describe($0, withModes: false) }

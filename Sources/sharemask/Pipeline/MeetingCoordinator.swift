@@ -26,6 +26,9 @@ final class MeetingCoordinator {
     var calendarLookahead = false { didSet { if calendarLookahead && !oldValue { requestCalendarAccess() } } }
     /// Main thread; called whenever the detector's view of "in a meeting" changes.
     var onStatus: ((String) -> Void)?
+    /// Screens to offer in the start prompt (names, selected index) and the handler for the pick.
+    var screenChoices: (() -> (names: [String], selected: Int))?
+    var onChooseScreen: ((Int) -> Void)?
     private(set) var statusText = "no meeting detected"
 
     init(pipeline: Pipeline) {
@@ -87,9 +90,14 @@ final class MeetingCoordinator {
     }
 
     private func askToStart(detail: String) {
+        let choices = screenChoices?()
+        let multi = (choices?.names.count ?? 0) > 1
         prompt.show(title: "Meeting detected — start sharemask proxy?",
-                    detail: detail + " Start the proxy so you can share the “sharemask” display safely.",
+                    detail: detail + (multi ? " Pick the screen to mirror, then share the “sharemask” display."
+                                            : " Start the proxy so you can share the “sharemask” display safely."),
                     primary: "Start proxy", secondary: "Not now",
+                    choices: multi ? choices?.names : nil, selected: choices?.selected ?? 0,
+                    onChoice: { [weak self] i in self?.onChooseScreen?(i) },
                     onPrimary: { [weak self] in self?.startProxy(reason: "user accepted prompt") },
                     onSecondary: { [weak self] in self?.declinedForThisSignal = true; Log.info("meeting prompt declined") })
     }
