@@ -27,6 +27,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         var openScreenRecordingSettings: () -> Void
         var relaunch: () -> Void
         var bringBackStrays: () -> Void
+        var chooseScreen: (CGDirectDisplayID) -> Void
         var checkUpdates: () -> Void
         var updateNow: () -> Void
         var copyUpdateCommand: () -> Void
@@ -61,6 +62,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let relaunchItem = NSMenuItem()
     private let strayItem = NSMenuItem()
     private let versionItem = NSMenuItem()
+    private let screenItem = NSMenuItem()
     private let updateChecksItem = NSMenuItem()
     private let removeDisplayItem = NSMenuItem()
 
@@ -123,6 +125,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
         menu.addItem(strayItem)
         menu.addItem(.separator())
         menu.addItem(startStopItem)
+        screenItem.submenu = NSMenu()
+        screenItem.isHidden = true
+        menu.addItem(screenItem)
         menu.addItem(panicItem)
         menu.addItem(endShareItem)
         menu.addItem(.separator())
@@ -385,6 +390,22 @@ final class MenuBar: NSObject, NSMenuDelegate {
     @objc private func openPermission() { actions.openScreenRecordingSettings() }
     @objc private func relaunch() { actions.relaunch() }
     @objc private func bringBackStrays() { actions.bringBackStrays() }
+
+    /// "Share screen: <name> ▸" — only shown when more than one real screen is connected.
+    func updateScreens(_ screens: [(id: CGDirectDisplayID, name: String)], selected: CGDirectDisplayID) {
+        screenItem.isHidden = screens.count < 2
+        screenItem.title = "Share screen: \(screens.first { $0.id == selected }?.name ?? "—")"
+        let m = screenItem.submenu!
+        m.removeAllItems()
+        for s in screens {
+            let mi = NSMenuItem(title: s.name, action: #selector(chooseScreen(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.tag = Int(s.id)
+            mi.state = s.id == selected ? .on : .off
+            m.addItem(mi)
+        }
+    }
+    @objc private func chooseScreen(_ sender: NSMenuItem) { actions.chooseScreen(CGDirectDisplayID(sender.tag)) }
     @objc private func checkUpdates() { actions.checkUpdates() }
     @objc private func updateNow() { actions.updateNow() }
     @objc private func copyUpdateCommand() { actions.copyUpdateCommand() }

@@ -22,6 +22,7 @@ final class Presenter: FrameSink {
     private let lock = NSLock()
     private var drawableSize = CGSize.zero
     private var screenObserver: NSObjectProtocol?
+    private var attachRetries = 0
     let virtualDisplayID: CGDirectDisplayID
     private var black: CIImage { CIImage(color: CIColor(red: 0, green: 0, blue: 0)) }
 
@@ -50,7 +51,15 @@ final class Presenter: FrameSink {
     func attachToScreen() -> Bool {
         if window != nil { return true }
         guard CGDisplayIsMain(virtualDisplayID) == 0, CGDisplayIsInMirrorSet(virtualDisplayID) == 0 else {
-            Log.error("refusing to present: virtual display \(virtualDisplayID) is main or mirrored (would cover the real screen)")
+            // Right after creation the display briefly sits at (0,0) while macOS arranges it, which
+            // reads as "main". Retry for a few seconds instead of giving up (giving up left the
+            // proxy uncovered: its empty desktop was shared and windows landed on it).
+            attachRetries += 1
+            if attachRetries <= 40 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in _ = self?.attachToScreen() }
+            } else {
+                Log.error("refusing to present: virtual display \(virtualDisplayID) is still main or mirrored after 4 s (would cover the real screen)")
+            }
             return false
         }
         guard let screen = NSScreen.screens.first(where: { $0.displayID == virtualDisplayID }) else {

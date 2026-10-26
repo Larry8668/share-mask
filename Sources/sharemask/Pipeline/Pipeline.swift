@@ -19,7 +19,13 @@ final class Pipeline {
     /// The proxy display exists only while capture is wanted (on demand): outside meetings there is
     /// no hidden screen for other apps' windows to get lost on. See bringUpDisplay/tearDownDisplay.
     private(set) var virtualDisplay: VirtualDisplay?
-    let displaySpec: VirtualDisplay.Spec
+    /// Proxy display spec, sized to the screen being shared.
+    var displaySpec: VirtualDisplay.Spec {
+        VirtualDisplay.Spec.forSource(pixelsWide: Int(source.geometry.pixelSize.width),
+                                      pixelsHigh: Int(source.geometry.pixelSize.height))
+    }
+    /// Layouts (keyed by the set of real displays) we already tried to fix this session.
+    private var placementAttempted: Set<String> = []
     /// Main thread. Fired after the display is created (true) or removed (false).
     var onDisplayChange: ((Bool) -> Void)?
     let tracker: WindowTracker
@@ -109,8 +115,7 @@ final class Pipeline {
         lock.lock(); _demoRegions = regions; lock.unlock()
     }
 
-    init(displaySpec: VirtualDisplay.Spec, source: SourceDisplay, tracker: WindowTracker) {
-        self.displaySpec = displaySpec
+    init(source: SourceDisplay, tracker: WindowTracker) {
         self.source = source
         self.tracker = tracker
         device = MTLCreateSystemDefaultDevice()!
@@ -137,6 +142,51 @@ final class Pipeline {
             Log.error("could not create proxy display: \(error)")
             state = .error("\(error)")
             return false
+        }
+    }
+
+    /// Switch which real screen is shared. Takes effect immediately: a running capture restarts on
+    /// the new screen with a correctly sized proxy display. Main thread.
+    func setSource(_ id: CGDirectDisplayID) {
+        let fresh = SourceDisplay.current(id: id)
+        guard fresh != source else { return }
+        Log.info("source screen → \(id) (\(Int(fresh.geometry.pixelSize.width))x\(Int(fresh.geometry.pixelSize.height)))")
+        source = fresh
+        guard state == .running || state == .starting else { return }
+        let cap = capture
+        capture = nil
+        tearDownDisplay()
+        Task {
+            await cap?.stop()
+            await startCapture()
+        }
+    }
+
+    /// If macOS slotted the proxy display next to (or between) real screens, move it to a corner via
+    /// the helper process and bring it back up; macOS then remembers the corner. Once per layout.
+    private func ensureGoodPlacement() async {
+        let (bad, key, origin, spec): (Bool, String, CGPoint, VirtualDisplay.Spec) = await MainActor.run {
+            guard let vd = self.virtualDisplay else { return (false, "", .zero, self.displaySpec) }
+            let realIDs = DisplayLayout.realDisplays(excluding: vd.displayID)
+            let real = realIDs.map { CGDisplayBounds($0) }
+            let key = realIDs.map { "\(CGDisplayVendorNumber($0)):\(CGDisplayModelNumber($0)):\(CGDisplaySerialNumber($0))" }.sorted().joined(separator: "|")
+            let ok = DisplayLayout.isWellPlaced(vd.bounds, real: real)
+            if !ok { Log.warn("proxy display at \(vd.bounds) shares an edge with a real screen \(real)") }
+            return (!ok, key, DisplayLayout.cornerOrigin(real: real), self.displaySpec)
+        }
+        guard bad, !placementAttempted.contains(key) else { return }
+        placementAttempted.insert(key)
+        Log.info("placing proxy display at corner \(origin) via helper (one-time for this monitor setup)")
+        await MainActor.run { self.tearDownDisplay() }
+        for _ in 0..<100 {
+            if !(await MainActor.run { self.removalPending }) { break }
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        let placed = await Task.detached { DisplayLayout.placeWithHelper(spec: spec, origin: origin) }.value
+        try? await Task.sleep(nanoseconds: 300_000_000)   // let the helper's display go away
+        let ok = await MainActor.run { self.bringUpDisplay() }
+        if ok, let b = await MainActor.run(body: { self.virtualDisplay?.bounds }) {
+            Log.info("proxy display after placement: \(b) (helper \(placed ? "ok" : "failed"))")
         }
     }
 
@@ -293,6 +343,8 @@ final class Pipeline {
         }
         let ok = await MainActor.run { self.bringUpDisplay() }
         guard ok else { return }
+        await ensureGoodPlacement()
+        guard await MainActor.run(body: { self.virtualDisplay != nil }) else { return }
         let cap = Capture(displayID: source.id, pixelSize: source.geometry.pixelSize)
         cap.onStopped = { [weak self] error in
             guard let self = self else { return }

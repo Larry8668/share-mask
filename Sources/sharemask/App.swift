@@ -107,6 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             relaunch: { [weak self] in self?.relaunch() },
             bringBackStrays: { [weak self] in self?.bringBackStrays() },
+            chooseScreen: { [weak self] id in self?.chooseScreen(id) },
             checkUpdates: { [weak self] in self?.updates.check(manual: true) },
             updateNow: { [weak self] in self?.updates.updateNow() },
             copyUpdateCommand: { [weak self] in self?.updates.copyCommand() },
@@ -128,13 +129,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             refreshMenu()
             return
         }
-        let p = Pipeline(displaySpec: launch.spec, source: launch.source, tracker: tracker)
+        let p = Pipeline(source: savedSource() ?? launch.source, tracker: tracker)
         p.config = config.config
         p.captureMode = Pipeline.CaptureMode(rawValue: config.config.captureMode) ?? .ask
         let mc = MeetingCoordinator(pipeline: p)
         mc.mode = p.captureMode
         mc.calendarLookahead = config.config.calendarLookahead
         mc.onStatus = { [weak self] _ in self?.refreshMenu() }
+        mc.screenChoices = { [weak self] in
+            let screens = AppDelegate.realScreens()
+            let sel = screens.firstIndex { $0.id == self?.pipeline?.source.id } ?? 0
+            return (screens.map { $0.name }, sel)
+        }
+        mc.onChooseScreen = { [weak self] i in
+            let screens = AppDelegate.realScreens()
+            if i < screens.count { self?.chooseScreen(screens[i].id) }
+        }
         meetings = mc
         if demo { p.setDemoRegions([CGRect(x: 100, y: 100, width: 400, height: 300)]) }
         p.onStateChange = { [weak self] _ in self?.refreshMenu() }
@@ -147,7 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.preview.update(img, status: "\(p.panic ? "PANIC · " : "")\(self.options.allowlistMode ? "allowlist · " : "")\(p.clock.summary().fps.rounded()) fps")
         }
         pipeline = p
-        pointerGuard = PointerGuard(virtualDisplayID: { [weak p] in p?.virtualDisplay?.displayID }, sourceDisplayID: launch.source.id)
+        pointerGuard = PointerGuard(virtualDisplayID: { [weak p] in p?.virtualDisplay?.displayID }, sourceDisplayID: { [weak p] in p?.source.id ?? CGMainDisplayID() })
         p.onDisplayChange = { [weak self] up in
             if !up { self?.promptedStrayIDs.removeAll(); self?.strayCount = 0 }
             self?.refreshMenu()
@@ -275,7 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func togglePreview() {
-        preview.toggle(sourceDisplayID: launch.source.id)
+        preview.toggle(sourceDisplayID: pipeline?.source.id ?? launch.source.id)
         if preview.isVisible, let img = pipeline?.lastRenderedImage { preview.update(img, status: "") }
         refreshMenu()
     }
@@ -373,7 +383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateHUD() {
         guard hudEnabled, let p = pipeline else { hud.hide(); return }
-        hud.show(on: launch.source.id)
+        hud.show(on: pipeline?.source.id ?? launch.source.id)
         if p.panic { hud.set(.panic) }
         else if !p.state.isRunning { hud.set(.stopped) }
         else if !p.regionsEnabled { hud.set(.regionsOff) }
@@ -442,6 +452,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if p.state.isRunning, let m = meetings { latency += "\n" + m.statusText }
         }
 
+        menuBar.updateScreens(AppDelegate.realScreens(), selected: pipeline?.source.id ?? CGMainDisplayID())
         menuBar.updateVersion(current: UpdateChecker.currentVersion, status: updates.status,
                               checksEnabled: updates.enabled, homebrew: UpdateChecker.installedWithHomebrew)
         menuBar.update(status: status, latency: latency, warning: warning, running: running, panic: panic,
@@ -464,6 +475,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func vdSafe(_ p: Pipeline) -> Bool { p.virtualDisplay?.isSafeToPresent ?? true }
 
+    // MARK: Which screen to share
+
+    /// Physical screens (sharemask's own proxy excluded), main first.
+    static func realScreens() -> [(id: CGDirectDisplayID, name: String)] {
+        let ids = DisplayLayout.realDisplays(excluding: nil).sorted { CGDisplayIsMain($0) > CGDisplayIsMain($1) }
+        return ids.map { id in
+            let name = NSScreen.screens.first { $0.displayID == id }?.localizedName
+                ?? (CGDisplayIsBuiltin(id) != 0 ? "Built-in display" : "Display \(id)")
+            return (id, name)
+        }
+    }
+
+    /// Display IDs change across reconnects; remember the screen by vendor/model/serial.
+    private static func screenKey(_ id: CGDirectDisplayID) -> String {
+        "\(CGDisplayVendorNumber(id)):\(CGDisplayModelNumber(id)):\(CGDisplaySerialNumber(id))"
+    }
+
+    private func savedSource() -> SourceDisplay? {
+        guard let key = UserDefaults.standard.string(forKey: "sourceScreen"),
+              let id = AppDelegate.realScreens().first(where: { AppDelegate.screenKey($0.id) == key })?.id else { return nil }
+        return SourceDisplay.current(id: id)
+    }
+
+    private func chooseScreen(_ id: CGDirectDisplayID) {
+        UserDefaults.standard.set(AppDelegate.screenKey(id), forKey: "sourceScreen")
+        pipeline?.setSource(id)
+        refreshMenu()
+    }
+
     // MARK: Stray windows on the proxy display
 
     private var strayCount = 0
@@ -479,7 +519,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         strayCount = strays.count
         guard !strays.isEmpty else { return }
-        let home = CGDisplayBounds(launch.source.id).insetBy(dx: 40, dy: 60)
+        let home = CGDisplayBounds(pipeline?.source.id ?? launch.source.id).insetBy(dx: 40, dy: 60)
         if WindowEvacuator.isTrusted {
             WindowEvacuator.evacuate(strays, into: home)
             return
@@ -501,7 +541,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func bringBackStrays(forceRemove: Bool = false) {
         guard let p = pipeline else { return }
         if !forceRemove && WindowEvacuator.isTrusted {
-            let n = WindowEvacuator.evacuate(p.strayWindows, into: CGDisplayBounds(launch.source.id).insetBy(dx: 40, dy: 60))
+            let n = WindowEvacuator.evacuate(p.strayWindows, into: CGDisplayBounds(pipeline?.source.id ?? launch.source.id).insetBy(dx: 40, dy: 60))
             Log.info("bring back: moved \(n) window(s)")
         } else {
             Log.info("bring back: removing proxy display so macOS returns its windows")

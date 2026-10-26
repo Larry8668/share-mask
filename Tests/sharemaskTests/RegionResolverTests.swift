@@ -242,3 +242,31 @@ final class ResolverOptionsTests: XCTestCase {
         XCTAssertEqual(c.hotkeys.endShare, "cmd+shift+ctrl+X")
     }
 }
+
+final class DisplayLayoutTests: XCTestCase {
+    let builtin = CGRect(x: 0, y: 0, width: 1470, height: 956)
+
+    func testBugLayoutIsDetected() {
+        // 2026-10-26: proxy slotted in at x=1470, external monitor pushed to x=4410.
+        let proxy = CGRect(x: 1470, y: 0, width: 2940, height: 1912)
+        let external = CGRect(x: 4410, y: -124, width: 1920, height: 1080)
+        XCTAssertFalse(DisplayLayout.isWellPlaced(proxy, real: [builtin, external]))
+        XCTAssertGreaterThan(DisplayLayout.sharedEdge(proxy, builtin), 0)
+        XCTAssertGreaterThan(DisplayLayout.sharedEdge(proxy, external), 0)
+    }
+
+    func testCornerPlacementTouchesOnlyAtACorner() {
+        let external = CGRect(x: 1470, y: -124, width: 1920, height: 1080)
+        let origin = DisplayLayout.cornerOrigin(real: [builtin, external])
+        XCTAssertEqual(origin, CGPoint(x: 3390, y: 956))
+        let proxy = CGRect(origin: origin, size: CGSize(width: 2940, height: 1912))
+        XCTAssertTrue(DisplayLayout.isWellPlaced(proxy, real: [builtin, external]))
+    }
+
+    func testSingleDisplayCorner() {
+        let proxy = CGRect(origin: DisplayLayout.cornerOrigin(real: [builtin]), size: CGSize(width: 2940, height: 1912))
+        XCTAssertEqual(proxy.origin, CGPoint(x: 1470, y: 956))
+        XCTAssertTrue(DisplayLayout.isWellPlaced(proxy, real: [builtin]))
+        XCTAssertFalse(DisplayLayout.isWellPlaced(CGRect(x: 1470, y: 0, width: 100, height: 100), real: [builtin]))
+    }
+}
