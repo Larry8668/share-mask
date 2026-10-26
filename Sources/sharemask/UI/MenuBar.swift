@@ -28,6 +28,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
         var relaunch: () -> Void
         var bringBackStrays: () -> Void
         var chooseScreen: (CGDirectDisplayID) -> Void
+        var present: (CGDirectDisplayID, Bool) -> Void   // (tv, mirror?)
+        var stopPresenting: () -> Void
+        var showKeys: () -> Void
         var checkUpdates: () -> Void
         var updateNow: () -> Void
         var copyUpdateCommand: () -> Void
@@ -63,6 +66,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let strayItem = NSMenuItem()
     private let versionItem = NSMenuItem()
     private let screenItem = NSMenuItem()
+    private let presentItem = NSMenuItem()
     private let updateChecksItem = NSMenuItem()
     private let removeDisplayItem = NSMenuItem()
 
@@ -128,6 +132,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
         screenItem.submenu = NSMenu()
         screenItem.isHidden = true
         menu.addItem(screenItem)
+        presentItem.submenu = NSMenu()
+        presentItem.isHidden = true
+        menu.addItem(presentItem)
         menu.addItem(panicItem)
         menu.addItem(endShareItem)
         menu.addItem(.separator())
@@ -174,6 +181,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         // Troubleshooting ▸
         let trouble = NSMenu()
         trouble.addItem(removeDisplayItem)
+        trouble.addItem(item("Keyboard shortcuts…", #selector(showKeys)))
         trouble.addItem(item("Show log file", #selector(openLogs)))
         trouble.addItem(item("Dump window list to log", #selector(dumpWindows)))
         trouble.addItem(item("Relaunch sharemask", #selector(relaunch)))
@@ -405,6 +413,40 @@ final class MenuBar: NSObject, NSMenuDelegate {
             m.addItem(mi)
         }
     }
+    /// "Present to <TV> ▸" — offered for each external screen.
+    func updatePresent(_ externals: [(id: CGDirectDisplayID, name: String)], active: Pipeline.Output) {
+        presentItem.isHidden = externals.isEmpty
+        let m = presentItem.submenu!
+        m.removeAllItems()
+        if let tv = active.tv {
+            let name = externals.first { $0.id == tv }?.name ?? "screen"
+            presentItem.title = "Presenting to \(name)"
+        } else {
+            presentItem.title = externals.count == 1 ? "Present to \(externals[0].name)" : "Present to a screen"
+        }
+        for e in externals {
+            if externals.count > 1 {
+                let h = NSMenuItem(title: e.name, action: nil, keyEquivalent: ""); h.isEnabled = false; m.addItem(h)
+            }
+            let ext = NSMenuItem(title: "Masked extend — drag windows onto it", action: #selector(presentChosen(_:)), keyEquivalent: "")
+            ext.target = self; ext.tag = Int(e.id); ext.representedObject = false
+            ext.state = active == .overlay(e.id) ? .on : .off
+            let mir = NSMenuItem(title: "Masked mirror — it shows your screen", action: #selector(presentChosen(_:)), keyEquivalent: "")
+            mir.target = self; mir.tag = Int(e.id); mir.representedObject = true
+            mir.state = active == .mirror(e.id) ? .on : .off
+            m.addItem(ext); m.addItem(mir)
+        }
+        if active.tv != nil {
+            m.addItem(.separator())
+            m.addItem(item("Stop presenting", #selector(stopPresenting)))
+        }
+    }
+    @objc private func presentChosen(_ sender: NSMenuItem) {
+        actions.present(CGDirectDisplayID(sender.tag), (sender.representedObject as? Bool) ?? false)
+    }
+    @objc private func stopPresenting() { actions.stopPresenting() }
+    @objc private func showKeys() { actions.showKeys() }
+
     @objc private func chooseScreen(_ sender: NSMenuItem) { actions.chooseScreen(CGDirectDisplayID(sender.tag)) }
     @objc private func checkUpdates() { actions.checkUpdates() }
     @objc private func updateNow() { actions.updateNow() }

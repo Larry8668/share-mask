@@ -1,9 +1,11 @@
 import AppKit
 import Carbon
 import ServiceManagement
+import ScreenCaptureKit
 
 @main
 enum Main {
+    static var signalSources: [DispatchSourceSignal] = []
     static func main() {
         let args = Array(CommandLine.arguments.dropFirst())
         Log.start(role: args.first == "--probe" ? "probe" : "app")
@@ -21,6 +23,15 @@ enum Main {
         // by the `--probe <id>` child process anyway.
         let launch = Launch.createVirtualDisplayEarly()
 
+        // SIGTERM/SIGINT (pkill, the Homebrew update script, logout) → a normal quit, so the proxy
+        // display is released and any TV mirroring we switched off is restored.
+        for sig in [SIGTERM, SIGINT] {
+            signal(sig, SIG_IGN)
+            let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            src.setEventHandler { Log.info("signal \(sig): quitting cleanly"); NSApp.terminate(nil) }
+            src.resume()
+            Main.signalSources.append(src)
+        }
         let app = NSApplication.shared
         let delegate = AppDelegate(launch: launch, demo: args.contains("--demo"))
         app.delegate = delegate
@@ -68,6 +79,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let preview = PreviewWindow()
     private let recorder = HotkeyRecorder()
     private let updates = UpdateChecker()
+    private let keysPanel = KeysPanel()
+    private var sessionKeysOn = false
+    private var shownKeysThisLaunch = false
+    private var knownExternals: Set<String> = []
     private let alerts = PromptPanel()
     private var options = ResolveOptions() { didSet { pipeline?.options = options; refreshMenu(); updateHUD() } }
     private var refreshTimer: Timer?
@@ -108,6 +123,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             relaunch: { [weak self] in self?.relaunch() },
             bringBackStrays: { [weak self] in self?.bringBackStrays() },
             chooseScreen: { [weak self] id in self?.chooseScreen(id) },
+            present: { [weak self] tv, mirror in self?.present(tv: tv, mirror: mirror) },
+            stopPresenting: { [weak self] in self?.stopPresenting() },
+            showKeys: { [weak self] in self?.keysPanel.show(on: self?.launch.source.id ?? CGMainDisplayID()) },
             checkUpdates: { [weak self] in self?.updates.check(manual: true) },
             updateNow: { [weak self] in self?.updates.updateNow() },
             copyUpdateCommand: { [weak self] in self?.updates.copyCommand() },
@@ -147,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         meetings = mc
         if demo { p.setDemoRegions([CGRect(x: 100, y: 100, width: 400, height: 300)]) }
-        p.onStateChange = { [weak self] _ in self?.refreshMenu() }
+        p.onStateChange = { [weak self] _ in self?.refreshMenu(); self?.updateSessionKeys() }
         p.onStall = { [weak self] msg in self?.stallAlert(msg) }
         var snapDir = ProcessInfo.processInfo.environment["SHAREMASK_SNAPSHOT"]
         if let i = CommandLine.arguments.firstIndex(of: "--snapshot"), i + 1 < CommandLine.arguments.count { snapDir = CommandLine.arguments[i + 1] }
@@ -157,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.preview.update(img, status: "\(p.panic ? "PANIC · " : "")\(self.options.allowlistMode ? "allowlist · " : "")\(p.clock.summary().fps.rounded()) fps")
         }
         pipeline = p
-        pointerGuard = PointerGuard(virtualDisplayID: { [weak p] in p?.virtualDisplay?.displayID }, sourceDisplayID: { [weak p] in p?.source.id ?? CGMainDisplayID() })
+        pointerGuard = PointerGuard(virtualDisplayID: { [weak p] in p?.guardedDisplayID }, sourceDisplayID: { [weak p] in p?.source.id ?? CGMainDisplayID() })
         p.onDisplayChange = { [weak self] up in
             if !up { self?.promptedStrayIDs.removeAll(); self?.strayCount = 0 }
             self?.refreshMenu()
@@ -166,6 +184,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.start()
         meetings?.start()
 
+        knownExternals = Set(AppDelegate.externalScreens().map { AppDelegate.screenKey($0.id) })
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self?.screensChanged() }
+        }
+        runTestHooks()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.checkStrays(); self?.refreshMenu() }
         refreshMenu()
         if ProcessInfo.processInfo.environment["SHAREMASK_DUMP_WINDOWS"] != nil {
@@ -355,9 +378,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func masksEntries() -> [MenuBar.MaskEntry] {
         var out: [MenuBar.MaskEntry] = []
         let cfg = config.config
-        for (bundleID, app) in cfg.apps.sorted(by: { $0.key < $1.key }) {
+        for (n, (bundleID, app)) in cfg.apps.sorted(by: { $0.key < $1.key }).enumerated() {
             let name = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName ?? bundleID
-            out.append(.init(title: name, key: bundleID, enabled: !options.disabled.contains(bundleID)))
+            let shortcut = n < 9 ? "   ⌃⌥\(n + 1)" : ""
+            out.append(.init(title: "\(n + 1). \(name)\(shortcut)", key: bundleID, enabled: !options.disabled.contains(bundleID)))
             for r in app.regions {
                 let key = "\(bundleID)/\(r.name)"
                 out.append(.init(title: r.name, key: key, enabled: !options.disabled.contains(key) && !options.disabled.contains(bundleID)))
@@ -452,6 +476,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if p.state.isRunning, let m = meetings { latency += "\n" + m.statusText }
         }
 
+        menuBar.updatePresent(AppDelegate.externalScreens(), active: pipeline?.output ?? .proxy)
         menuBar.updateScreens(AppDelegate.realScreens(), selected: pipeline?.source.id ?? CGMainDisplayID())
         menuBar.updateVersion(current: UpdateChecker.currentVersion, status: updates.status,
                               checksEnabled: updates.enabled, homebrew: UpdateChecker.installedWithHomebrew)
@@ -482,7 +507,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let ids = DisplayLayout.realDisplays(excluding: nil).sorted { CGDisplayIsMain($0) > CGDisplayIsMain($1) }
         return ids.map { id in
             let name = NSScreen.screens.first { $0.displayID == id }?.localizedName
-                ?? (CGDisplayIsBuiltin(id) != 0 ? "Built-in display" : "Display \(id)")
+                ?? (CGDisplayIsBuiltin(id) != 0 ? "Built-in display" : (CGDisplayIsInMirrorSet(id) != 0 ? "External display (mirroring)" : "External display"))
             return (id, name)
         }
     }
@@ -502,6 +527,187 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(AppDelegate.screenKey(id), forKey: "sourceScreen")
         pipeline?.setSource(id)
         refreshMenu()
+    }
+
+    // MARK: Presenting to a TV / projector (HDMI, AirPlay, Sidecar)
+
+    /// Physical screens other than the built-in one (and other than sharemask's proxy).
+    /// Present targets: real screens other than the built-in one. (With the lid closed and only an
+    /// external connected there is nothing to present to: that screen is the one being mirrored.)
+    static func externalScreens() -> [(id: CGDirectDisplayID, name: String)] {
+        let all = realScreens()
+        guard all.count > 1 else { return [] }
+        return all.filter { CGDisplayIsBuiltin($0.id) == 0 }
+    }
+
+    private func present(tv: CGDirectDisplayID, mirror: Bool) {
+        guard let p = pipeline else { return }
+        UserDefaults.standard.set(mirror ? "mirror" : "extend", forKey: "presentMode")
+        Log.info("present to \(tv): \(mirror ? "masked mirror" : "masked extend")")
+        p.setOutput(mirror ? .mirror(tv) : .overlay(tv))
+        if p.state == .stopped || p.state == .idle { p.start() }
+        refreshMenu()
+    }
+
+    private func stopPresenting() {
+        guard let p = pipeline, p.output != .proxy else { return }
+        Log.info("stop presenting")
+        p.setOutput(.proxy)
+        refreshMenu()
+    }
+
+    /// A new external screen appeared → offer to present to it. A presented screen vanished → stop.
+    private func screensChanged() {
+        let externals = AppDelegate.externalScreens()
+        if let p = pipeline, let tv = p.output.tv, !externals.contains(where: { $0.id == tv }) {
+            Log.warn("presentation screen \(tv) disconnected")
+            stopPresenting()
+        }
+        let keys = Set(externals.map { AppDelegate.screenKey($0.id) })
+        let fresh = externals.filter { !knownExternals.contains(AppDelegate.screenKey($0.id)) }
+        knownExternals = keys
+        refreshMenu()
+        guard let tv = fresh.first, pipeline?.output == .proxy else { return }
+        offerPresent(to: tv)
+    }
+
+    private func offerPresent(to tv: (id: CGDirectDisplayID, name: String)) {
+        let mirrored = Mirroring.isMirrored(tv.id)
+        let last = UserDefaults.standard.string(forKey: "presentMode") == "mirror" ? 1 : 0
+        Log.info("external screen connected: \(tv.name) (\(tv.id)) mirrored=\(mirrored)")
+        alerts.show(title: "\(tv.name) connected — present with masks?",
+                    detail: mirrored ? "It's mirroring right now; sharemask will switch it to a separate display and back when you stop."
+                                     : "Extend: drag windows onto it, masked parts come out pixellated. Mirror: it shows your screen, masked.",
+                    primary: "Present", secondary: "Not now", timeout: 60,
+                    choices: ["Masked extend — drag windows onto it", "Masked mirror — it shows your screen"], selected: last,
+                    onChoice: { [weak self] i in self?.pendingPresentMirror = (i == 1) },
+                    onPrimary: { [weak self] in self?.present(tv: tv.id, mirror: self?.pendingPresentMirror ?? (last == 1)) },
+                    onSecondary: {})
+    }
+    private var pendingPresentMirror: Bool?
+
+    // MARK: Session keys (simple ⌃⌥ combos, only while capturing/presenting)
+
+    private func updateSessionKeys() {
+        let want = pipeline?.state.isRunning ?? false
+        guard want != sessionKeysOn else { return }
+        sessionKeysOn = want
+        if want {
+            let main = DispatchQueue.main
+            hotkeys.set(.sPanic, combo: "ctrl+alt+B") { [weak self] in main.async { self?.togglePanic() } }
+            hotkeys.set(.sToggle, combo: "ctrl+alt+M") { [weak self] in main.async { self?.toggleRegions() } }
+            hotkeys.set(.sReveal, combo: "ctrl+alt+R",
+                        handler: { [weak self] in main.async { self?.setReveal(true) } },
+                        onRelease: { [weak self] in main.async { self?.setReveal(false) } })
+            hotkeys.set(.sAllowlist, combo: "ctrl+alt+A") { [weak self] in main.async { self?.toggleAllowlist() } }
+            hotkeys.set(.sEnd, combo: "ctrl+alt+X") { [weak self] in main.async { self?.endSessionKey() } }
+            hotkeys.set(.sAllOn, combo: "ctrl+alt+0") { [weak self] in main.async { self?.reenableAllMasks() } }
+            hotkeys.set(.sKeys, combo: "ctrl+alt+K") { [weak self] in main.async { self?.keysPanel.show(on: self?.launch.source.id ?? CGMainDisplayID()) } }
+            let numbered: [Hotkeys.Action] = [.sMask1, .sMask2, .sMask3, .sMask4, .sMask5, .sMask6, .sMask7, .sMask8, .sMask9]
+            for (i, a) in numbered.enumerated() {
+                hotkeys.set(a, combo: "ctrl+alt+\(i + 1)") { [weak self] in main.async { self?.toggleNumberedMask(i) } }
+            }
+            Log.info("session keys on (⌃⌥B/M/R/A/X/0-9/K)")
+            if !shownKeysThisLaunch {
+                shownKeysThisLaunch = true
+                keysPanel.show(on: launch.source.id)
+            }
+        } else {
+            Hotkeys.Action.session.forEach { hotkeys.unregister($0) }
+            Log.info("session keys off")
+        }
+    }
+
+    /// Apps in the order shown (numbered) in the Masks menu.
+    private var numberedApps: [String] { config.config.apps.keys.sorted() }
+
+    private func toggleNumberedMask(_ i: Int) {
+        let apps = numberedApps
+        guard i < apps.count else { Log.info("⌃⌥\(i + 1): no app #\(i + 1)"); return }
+        toggleMask(apps[i])
+    }
+
+    private func reenableAllMasks() {
+        options.disabled.removeAll()
+        options.revealed.removeAll()
+        Log.info("all masks re-enabled")
+    }
+
+    private func endSessionKey() {
+        if pipeline?.output != .proxy { stopPresenting() } else { endShare(confirm: false) }
+    }
+
+    // MARK: Test hooks (development only; flags never set in normal use)
+
+    private func runTestHooks() {
+        let args = CommandLine.arguments
+        func value(_ flag: String) -> String? { args.firstIndex(of: flag).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
+        if let mode = value("--present") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard let tv = AppDelegate.externalScreens().first else { Log.error("test: no external screen"); return }
+                self?.present(tv: tv.id, mirror: mode == "mirror")
+            }
+        }
+        if let dir = value("--snapshot-screen") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in self?.snapshotOutputScreen(to: dir) }
+        }
+        if args.contains("--selftest-keys") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.selftestKeys() }
+        }
+    }
+
+    /// Screenshot of the presentation screen as the room sees it (our windows included).
+    private func snapshotOutputScreen(to dir: String) {
+        guard let tv = pipeline?.output.tv else { Log.error("test: not presenting"); return }
+        Task {
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                guard let d = content.displays.first(where: { $0.displayID == tv }) else { return }
+                let cfg = SCStreamConfiguration()
+                cfg.width = d.width; cfg.height = d.height; cfg.showsCursor = false
+                let img = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: d, excludingWindows: []), configuration: cfg)
+                let url = URL(fileURLWithPath: dir).appendingPathComponent("screen.png")
+                if let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) {
+                    CGImageDestinationAddImage(dest, img, nil); CGImageDestinationFinalize(dest)
+                }
+                Log.info("test: wrote \(url.path)")
+            } catch { Log.error("test: snapshot failed \(error)") }
+        }
+    }
+
+    /// Posts the session key combos as real keyboard events (needs Accessibility) and logs state.
+    private func selftestKeys() {
+        guard WindowEvacuator.isTrusted else { Log.error("selftest: needs Accessibility"); return }
+        let src = CGEventSource(stateID: .hidSystemState)
+        func press(_ key: CGKeyCode, hold: TimeInterval = 0.05, then: @escaping () -> Void) {
+            let flags: CGEventFlags = [.maskControl, .maskAlternate]
+            let down = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: true); down?.flags = flags
+            let up = CGEvent(keyboardEventSource: src, virtualKey: key, keyDown: false); up?.flags = flags
+            down?.post(tap: .cghidEventTap)
+            DispatchQueue.main.asyncAfter(deadline: .now() + hold) {
+                up?.post(tap: .cghidEventTap)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: then)
+            }
+        }
+        let p = pipeline!
+        func log(_ what: String) { Log.info("selftest \(what): panic=\(p.panic) regions=\(p.regionsEnabled) allowlist=\(options.allowlistMode) disabled=\(options.disabled.sorted()) revealed=\(options.revealed.sorted())") }
+        log("start")
+        press(11) { log("after ⌃⌥B"); press(11) { log("after ⌃⌥B again")
+        press(46) { log("after ⌃⌥M"); press(46) { log("after ⌃⌥M again")
+        press(18) { log("after ⌃⌥1"); press(29) { log("after ⌃⌥0")
+        press(0) { log("after ⌃⌥A"); press(0) { log("after ⌃⌥A again")
+        holdR() } } } } } } } }
+        func holdR() {
+            let flags: CGEventFlags = [.maskControl, .maskAlternate]
+            let down = CGEvent(keyboardEventSource: src, virtualKey: 15, keyDown: true); down?.flags = flags
+            let up = CGEvent(keyboardEventSource: src, virtualKey: 15, keyDown: false); up?.flags = flags
+            down?.post(tap: .cghidEventTap)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                log("while holding ⌃⌥R")
+                up?.post(tap: .cghidEventTap)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { log("after releasing ⌃⌥R") }
+            }
+        }
     }
 
     // MARK: Stray windows on the proxy display

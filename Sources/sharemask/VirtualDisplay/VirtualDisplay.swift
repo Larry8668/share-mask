@@ -29,6 +29,11 @@ final class VirtualDisplay {
         var hiDPI: Bool
         var refreshHz: Double = 60
         var dpi: Double = 110
+        /// Identity. Defaults are sharemask's fixed identity (invariant 3); only the test "fake TV"
+        /// (probe --fake-tv) overrides them.
+        var name: String = VirtualDisplay.name
+        var vendor: UInt32 = VirtualDisplay.vendorID
+        var product: UInt32 = VirtualDisplay.productID
 
         /// The advertised pixel size; the display comes up at `modeWidth × modeHeight` points.
         ///
@@ -42,13 +47,13 @@ final class VirtualDisplay {
 
         var widthMM: Double { Double(modeWidth) / dpi * 25.4 }
         var heightMM: Double { Double(modeHeight) / dpi * 25.4 }
-        var serial: UInt32 { VirtualDisplay.stableSerial(name: VirtualDisplay.name, w: Int(modeWidth), h: Int(modeHeight)) }
+        var serial: UInt32 { VirtualDisplay.stableSerial(name: name, w: Int(modeWidth), h: Int(modeHeight)) }
 
         var cSpec: SMVirtualDisplaySpec {
             SMVirtualDisplaySpec(maxPixelsWide: pixelsWide, maxPixelsHigh: pixelsHigh,
                                  modeWidth: modeWidth, modeHeight: modeHeight, refreshHz: refreshHz,
                                  hiDPI: hiDPI ? 1 : 0, widthMM: widthMM, heightMM: heightMM,
-                                 vendorID: VirtualDisplay.vendorID, productID: VirtualDisplay.productID,
+                                 vendorID: vendor, productID: product,
                                  serial: serial)
         }
     }
@@ -85,7 +90,7 @@ final class VirtualDisplay {
     static func create(spec: Spec) throws -> VirtualDisplay {
         try checkAPI()
         var error: NSString?
-        guard let handle = SMVirtualDisplayCreate(name, spec.cSpec, &error) else {
+        guard let handle = SMVirtualDisplayCreate(spec.name, spec.cSpec, &error) else {
             throw Error.createFailed(error as String? ?? "unknown error")
         }
         return VirtualDisplay(handle: handle, spec: spec)

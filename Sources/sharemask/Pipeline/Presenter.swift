@@ -28,7 +28,13 @@ final class Presenter: FrameSink {
 
     var isReady: Bool { lock.lock(); defer { lock.unlock() }; return window != nil && drawableSize.width > 0 }
 
-    init(device: MTLDevice, context: CIContext, virtualDisplayID: CGDirectDisplayID) {
+    /// Transparent = overlay mode (masked extend): only the patches are drawn, everything else on
+    /// that screen shows through, and clicks pass through.
+    let transparent: Bool
+
+    /// `virtualDisplayID` is the target screen: the proxy display, or a physical TV/projector.
+    init(device: MTLDevice, context: CIContext, virtualDisplayID: CGDirectDisplayID, transparent: Bool = false) {
+        self.transparent = transparent
         self.device = device
         self.context = context
         self.virtualDisplayID = virtualDisplayID
@@ -41,8 +47,8 @@ final class Presenter: FrameSink {
         layer.displaySyncEnabled = true
         layer.maximumDrawableCount = 3
         layer.colorspace = colorSpace
-        layer.isOpaque = true
-        layer.backgroundColor = NSColor.black.cgColor
+        layer.isOpaque = !transparent
+        layer.backgroundColor = transparent ? NSColor.clear.cgColor : NSColor.black.cgColor
     }
 
     /// Finds the virtual display's NSScreen (it may not be listed immediately after creation) and
@@ -75,8 +81,8 @@ final class Presenter: FrameSink {
         w.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         w.ignoresMouseEvents = true
         w.hidesOnDeactivate = false
-        w.isOpaque = true
-        w.backgroundColor = .black
+        w.isOpaque = !transparent
+        w.backgroundColor = transparent ? .clear : .black
         w.hasShadow = false
         w.isReleasedWhenClosed = false
         w.sharingType = .readOnly          // MUST be capturable: this is the shared surface
@@ -151,6 +157,15 @@ final class Presenter: FrameSink {
         guard target.width > 0, let drawable = layer.nextDrawable(),
               let cb = commandQueue.makeCommandBuffer() else { return }
         let bounds = CGRect(origin: .zero, size: target)
+        if transparent {
+            // Overlay: same pixel grid as the screen it covers; clear everything but the patches.
+            let clear = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0)).cropped(to: bounds)
+            context.render(image.composited(over: clear), to: drawable.texture, commandBuffer: cb, bounds: bounds, colorSpace: colorSpace)
+            cb.present(drawable)
+            if let completion = completion { cb.addCompletedHandler { buf in completion(buf.gpuEndTime - buf.gpuStartTime) } }
+            cb.commit()
+            return
+        }
         var out = image
         let ext = image.extent
         if ext.size != target {

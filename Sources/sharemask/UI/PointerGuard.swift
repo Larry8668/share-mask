@@ -34,9 +34,9 @@ final class PointerGuard {
     private func check() {
         guard let id = virtualDisplayID() else { return }
         let vb = CGDisplayBounds(id)
-        // Fail open: if the proxy sits edge-to-edge with real screens (placement failed), warping
-        // could trap the cursor away from another monitor, so don't guard at all.
-        guard DisplayLayout.isWellPlaced(vb, real: DisplayLayout.realDisplays(excluding: id).map { CGDisplayBounds($0) }) else { return }
+        // Fail open: if the guarded screen sits between real screens (proxy placement failed, or a
+        // TV in the middle of the arrangement), warping would cut the cursor off from a monitor.
+        guard !DisplayLayout.isBetween(vb, real: DisplayLayout.realDisplays(excluding: id).map { CGDisplayBounds($0) }) else { return }
         guard vb.width > 0 else { return }
         // NSEvent.mouseLocation is AppKit (bottom-left of primary); convert to CG (top-left).
         let loc = NSEvent.mouseLocation

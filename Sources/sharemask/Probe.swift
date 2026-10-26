@@ -24,6 +24,31 @@ enum Probe {
         while let a = args.popFirst() {
             switch a {
             case "--no-create": create = false
+            case "--fake-tv":
+                // Test stand-in for an HDMI/AirPlay screen: its own identity, so sharemask treats it
+                // as an external physical display. Optional "--mirror" makes it mirror the main screen.
+                let size = parseSize(args.popFirst()) ?? (1920, 1080)
+                let mirror = args.first == "--mirror"; if mirror { _ = args.popFirst() }
+                var holdFor = 30.0
+                if args.first == "--hold" { _ = args.popFirst(); holdFor = Double(args.popFirst() ?? "") ?? 30 }
+                var spec = VirtualDisplay.Spec.forSource(pixelsWide: size.0, pixelsHigh: size.1)
+                spec.name = "faketv"; spec.vendor = 0x1234; spec.product = 0x0002
+                do {
+                    let tv = try VirtualDisplay.create(spec: spec)
+                    print("fake TV \(tv.displayID) \(size.0)x\(size.1) at \(CGDisplayBounds(tv.displayID))")
+                    if mirror {
+                        Thread.sleep(forTimeInterval: 0.5)
+                        var cfg: CGDisplayConfigRef?
+                        CGBeginDisplayConfiguration(&cfg)
+                        CGConfigureDisplayMirrorOfDisplay(cfg, tv.displayID, CGMainDisplayID())
+                        let r = CGCompleteDisplayConfiguration(cfg, .forSession)
+                        print("fake TV mirroring main: \(r.rawValue == 0 ? "ok" : "error \(r.rawValue)")")
+                    }
+                    fflush(stdout)
+                    Thread.sleep(forTimeInterval: holdFor)
+                    print("fake TV done (exit reclaims it)")
+                } catch { print("fake TV failed: \(error)"); return 1 }
+                return 0
             case "--place": placeOnly = true; hold = 0.3
             case "--windows":
                 var cache: [pid_t: String?] = [:]
@@ -122,7 +147,7 @@ enum Probe {
     static func activeDisplays() -> [CGDirectDisplayID] {
         var ids = [CGDirectDisplayID](repeating: 0, count: 32)
         var count: UInt32 = 0
-        CGGetActiveDisplayList(32, &ids, &count)
+        CGGetOnlineDisplayList(32, &ids, &count)   // online: includes screens that are mirroring
         return Array(ids[..<Int(count)])
     }
 
