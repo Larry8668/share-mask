@@ -24,6 +24,61 @@ final class Pipeline {
         VirtualDisplay.Spec.forSource(pixelsWide: Int(source.geometry.pixelSize.width),
                                       pixelsHigh: Int(source.geometry.pixelSize.height))
     }
+    /// Where the redacted picture goes.
+    ///  - proxy: the hidden "sharemask" virtual display, shared in Zoom/Meet (default).
+    ///  - mirror(tv): fullscreen on a physical TV/projector ("masked mirror": the room sees your
+    ///    screen, masked).
+    ///  - overlay(tv): capture the TV itself and draw only the patches on top of it ("masked
+    ///    extend": you drag windows onto the TV as usual, masked parts come out pixellated).
+    enum Output: Equatable {
+        case proxy, mirror(CGDirectDisplayID), overlay(CGDirectDisplayID)
+        var tv: CGDirectDisplayID? {
+            switch self { case .proxy: return nil; case .mirror(let d), .overlay(let d): return d }
+        }
+    }
+    private(set) var output: Output = .proxy
+    /// The user's chosen laptop screen, kept while overlay mode captures the TV instead.
+    private var userSource: SourceDisplay?
+    /// Mirroring we switched off for a present mode; restored when it ends.
+    private var unmirrored: [Mirroring.Pair] = []
+
+    /// Screen whose stray windows / pointer must be kept off: proxy display or the mirrored TV.
+    /// nil in overlay mode, where windows belong on the TV.
+    var guardedDisplayID: CGDirectDisplayID? {
+        switch output {
+        case .proxy: return virtualDisplay?.displayID
+        case .mirror(let tv): return presenter != nil ? tv : nil
+        case .overlay: return nil
+        }
+    }
+
+    /// Switch output mode. Main thread. Restarts capture if running.
+    func setOutput(_ new: Output) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard new != output else { return }
+        let wasActive = state == .running || state == .starting
+        let cap = capture
+        capture = nil
+        tearDownDisplay()
+        if case .overlay = output, let u = userSource { source = u; userSource = nil }
+        output = new
+        if case .overlay(let tv) = new { userSource = source; source = SourceDisplay.current(id: tv) }
+        Log.info("output → \(new)")
+        Task {
+            await cap?.stop()
+            await MainActor.run {
+                if self.captureWanted, self.state != .running, self.state != .starting {
+                    if self.state == .stopped || self.state == .idle { self.start() }
+                    else { self.state = .starting; Task { await self.startCapture() } }
+                } else if self.captureWanted, wasActive {
+                    Task { await self.startCapture() }
+                } else if !self.captureWanted, self.state == .running || self.state == .starting || wasActive {
+                    self.enterWaitingForMeeting()
+                }
+            }
+        }
+    }
+
     /// Layouts (keyed by the set of real displays) we already tried to fix this session.
     private var placementAttempted: Set<String> = []
     /// Main thread. Fired after the display is created (true) or removed (false).
@@ -85,7 +140,8 @@ final class Pipeline {
     var captureMode: CaptureMode = .ask { didSet { if captureMode != oldValue { DispatchQueue.main.async { self.gateChanged() } } } }
     /// Set by the App's meeting detection. Only consulted in `.auto`.
     var meetingActive = false { didSet { if meetingActive != oldValue { DispatchQueue.main.async { self.gateChanged() } } } }
-    private var captureWanted: Bool { (captureMode != .auto && captureMode != .ask) || meetingActive }
+    /// Presenting to a TV always captures; otherwise follow the meeting gate.
+    private var captureWanted: Bool { output != .proxy || (captureMode != .auto && captureMode != .ask) || meetingActive }
     static var watcherAPIAvailable: Bool { SMScreenWatcherAPIAvailable() }
     private var reconfigToken: CGDisplayReconfigurationCallBack?
 
@@ -128,6 +184,26 @@ final class Pipeline {
     @discardableResult
     func bringUpDisplay() -> Bool {
         dispatchPrecondition(condition: .onQueue(.main))
+        if let tv = output.tv {
+            if presenter != nil { return true }
+            guard DisplayLayout.realDisplays(excluding: nil).contains(tv) else {
+                state = .error("The presentation screen is no longer connected")
+                return false
+            }
+            let pairs = Mirroring.mirrorPairs(involving: tv)
+            if !pairs.isEmpty {
+                guard Mirroring.unmirror(pairs) else { state = .error("Could not switch the TV to a separate display"); return false }
+                unmirrored = pairs
+            }
+            let overlay: Bool
+            if case .overlay = output { overlay = true } else { overlay = false }
+            let pr = Presenter(device: device, context: redactor.context, virtualDisplayID: tv, transparent: overlay)
+            presenter = pr
+            _ = pr.attachToScreen()
+            Log.info("presenting on screen \(tv) (\(overlay ? "masked extend overlay" : "masked mirror"))")
+            onDisplayChange?(true)
+            return true
+        }
         if virtualDisplay != nil { return true }
         do {
             let vd = try VirtualDisplay.create(spec: displaySpec)
@@ -165,6 +241,7 @@ final class Pipeline {
     /// If macOS slotted the proxy display next to (or between) real screens, move it to a corner via
     /// the helper process and bring it back up; macOS then remembers the corner. Once per layout.
     private func ensureGoodPlacement() async {
+        guard output == .proxy else { return }
         let (bad, key, origin, spec): (Bool, String, CGPoint, VirtualDisplay.Spec) = await MainActor.run {
             guard let vd = self.virtualDisplay else { return (false, "", .zero, self.displaySpec) }
             let realIDs = DisplayLayout.realDisplays(excluding: vd.displayID)
@@ -194,6 +271,15 @@ final class Pipeline {
     /// the real display). Main thread.
     func tearDownDisplay() {
         dispatchPrecondition(condition: .onQueue(.main))
+        if output.tv != nil, presenter != nil {
+            presenter?.close()
+            presenter = nil
+            let pairs = unmirrored
+            unmirrored = []
+            // Immediate (not deferred) so it also happens when the app is quitting.
+            Mirroring.restore(pairs)
+            onDisplayChange?(false)
+        }
         guard let vd = virtualDisplay else { return }
         presenter?.close()
         presenter = nil
@@ -214,8 +300,8 @@ final class Pipeline {
     /// Other apps' normal windows currently sitting on the proxy display. They are invisible to the
     /// user (covered by the presenter) and can block apps (e.g. a Finder alert stops shutdown).
     var strayWindows: [TrackedWindow] {
-        guard let vd = virtualDisplay else { return [] }
-        let b = vd.bounds
+        guard let id = guardedDisplayID else { return [] }
+        let b = CGDisplayBounds(id)
         return tracker.latest.windows.filter {
             $0.pid != getpid() && $0.layer == 0 && $0.alpha > 0
                 && b.contains(CGPoint(x: $0.boundsPoints.midX, y: $0.boundsPoints.midY))
@@ -344,7 +430,7 @@ final class Pipeline {
         let ok = await MainActor.run { self.bringUpDisplay() }
         guard ok else { return }
         await ensureGoodPlacement()
-        guard await MainActor.run(body: { self.virtualDisplay != nil }) else { return }
+        guard await MainActor.run(body: { self.virtualDisplay != nil || self.presenter != nil }) else { return }
         let cap = Capture(displayID: source.id, pixelSize: source.geometry.pixelSize)
         cap.onStopped = { [weak self] error in
             guard let self = self else { return }
@@ -484,7 +570,9 @@ final class Pipeline {
         let entry = FrameClock.hostSeconds()
         let regions = currentRegions()
         lock.lock(); lastRegions = regions; lock.unlock()
-        let image = redactor.process(buffer, regions: regions)
+        let overlay: Bool
+        if case .overlay = output { overlay = true } else { overlay = false }
+        let image = redactor.process(buffer, regions: regions, patchesOnly: overlay)
         presenter?.present(image) { [clock] gpu in clock.recordGPU(seconds: gpu) }
         if let dir = snapshotDirectory, !snapshotTaken, FrameClock.hostSeconds() - captureStartedAt > 2 {
             snapshotTaken = true

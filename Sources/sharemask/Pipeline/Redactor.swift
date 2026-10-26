@@ -40,6 +40,12 @@ final class Redactor: FrameProcessor {
     }
 
     func process(_ src: CVPixelBuffer, regions: [PixelRegion]) -> CIImage {
+        process(src, regions: regions, patchesOnly: false)
+    }
+
+    /// `patchesOnly`: return just the redacted patches on a transparent background (overlay mode);
+    /// panic still returns a full opaque frame.
+    func process(_ src: CVPixelBuffer, regions: [PixelRegion], patchesOnly: Bool) -> CIImage {
         let base = CIImage(cvPixelBuffer: src)
         let frame = base.extent
 
@@ -50,9 +56,10 @@ final class Redactor: FrameProcessor {
             case .solid: return CIImage(color: CIColor(red: 0, green: 0, blue: 0)).cropped(to: frame)
             }
         }
-        guard !regions.isEmpty else { return base }
+        let clear = CIImage(color: CIColor(red: 0, green: 0, blue: 0, alpha: 0)).cropped(to: frame)
+        guard !regions.isEmpty else { return patchesOnly ? clear : base }
 
-        var acc = base
+        var acc = patchesOnly ? clear : base
         for region in regions {
             let rect = region.rect.intersection(frame).integral
             guard !rect.isNull, rect.width >= 1, rect.height >= 1 else { continue }

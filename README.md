@@ -108,6 +108,38 @@ The menu keeps the essentials on top; everything else is one level down.
 | ⚠ Bring back N windows… | | Appears only if another app put a window on the hidden display. |
 | sharemask 0.1.x ▸ | | Version and update status. **Check for updates now**, release notes, copy the update command, and **Update now** when a newer release exists (runs `brew upgrade --cask sharemask` in Terminal and relaunches). |
 
+### Keys while sharing
+While sharemask is capturing or presenting, simple ⌃⌥ keys are live (they're released again when it
+stops, so they never clash with other apps day to day). A card listing them appears the first time
+a session starts; ⌃⌥K shows it again.
+
+| Key | Action |
+|---|---|
+| ⌃⌥B | Panic: pixellate everything / restore |
+| ⌃⌥M | All per-app masks off / on |
+| ⌃⌥R (hold) | Reveal the frontmost app while held |
+| ⌃⌥1 … ⌃⌥9 | Unmask / re-mask app #1–9 (numbered in Masks ▸) |
+| ⌃⌥0 | Re-enable every mask |
+| ⌃⌥A | Allowlist mode on / off |
+| ⌃⌥X | End share / stop presenting |
+| ⌃⌥K | Show the key card |
+
+The ⌃⇧⌘ shortcuts (panic, toggle, pick, reveal, allowlist, end share) stay active all the time and
+can be remapped under Settings ▸ Shortcuts.
+
+### Presenting in a room (HDMI, AirPlay, Sidecar)
+When a TV or projector connects (cable, or AirPlay from Control Center ▸ Screen Mirroring), sharemask
+asks whether to present with masks, in one of two ways (also under **Present to <screen> ▸**):
+
+- **Masked extend**: keep extending as usual and drag windows onto the TV; masked parts of those
+  windows come out pixellated on the TV. Your laptop stays private.
+- **Masked mirror**: the TV shows your whole laptop screen, masked. Nothing else can appear on the
+  TV, and your cursor stays on the laptop.
+
+macOS's own mirror mode can't carry masks (the system copies the pixels itself), so if the TV
+connects mirrored, sharemask switches it to a separate display after you confirm, and switches it
+back when you stop or quit. Unplugging the TV stops presenting automatically.
+
 ### Multiple monitors
 With more than one screen connected, the menu shows **Share screen: <name> ▸** and the meeting
 prompt has a screen picker; the proxy display is sized to whichever screen you pick, and the

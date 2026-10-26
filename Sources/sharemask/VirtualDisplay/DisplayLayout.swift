@@ -14,10 +14,12 @@ import Foundation
 /// monitor setup, done by `sharemask --probe ... --origin X,Y` in a child process.
 enum DisplayLayout {
     /// Real (non-sharemask) active displays.
+    /// Uses the ONLINE list: a screen that is mirroring is online but not "active", and a TV
+    /// usually connects in mirror mode, so the active list would miss it entirely.
     static func realDisplays(excluding vd: CGDirectDisplayID?) -> [CGDirectDisplayID] {
         var ids = [CGDirectDisplayID](repeating: 0, count: 32)
         var n: UInt32 = 0
-        CGGetActiveDisplayList(32, &ids, &n)
+        CGGetOnlineDisplayList(32, &ids, &n)
         return ids[..<Int(n)].filter { $0 != vd && CGDisplayVendorNumber($0) != VirtualDisplay.vendorID }
     }
 
@@ -34,6 +36,12 @@ enum DisplayLayout {
     /// along an edge and it can't sit between two screens.
     static func isWellPlaced(_ vd: CGRect, real: [CGRect]) -> Bool {
         real.allSatisfy { sharedEdge(vd, $0) < 1 && !$0.intersects(vd) }
+    }
+
+    /// True if `target` sits between real screens (shares an edge with two or more), i.e. blocking
+    /// it would cut the cursor off from a screen behind it.
+    static func isBetween(_ target: CGRect, real: [CGRect]) -> Bool {
+        real.filter { sharedEdge(target, $0) >= 1 }.count >= 2
     }
 
     /// Below-right corner of the right-most real display: nothing extends past its right edge, so

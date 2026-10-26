@@ -4,7 +4,14 @@ import AppKit
 /// Global hotkeys via Carbon `RegisterEventHotKey` (works when any app is frontmost, no
 /// Accessibility permission required). Strings look like "cmd+shift+ctrl+B".
 final class Hotkeys {
-    enum Action: UInt32, CaseIterable { case panic = 1, toggle = 2, pick = 3, reveal = 4, allowlist = 5, endShare = 6 }
+    enum Action: UInt32, CaseIterable {
+        case panic = 1, toggle = 2, pick = 3, reveal = 4, allowlist = 5, endShare = 6
+        // Session keys: simple ⌃⌥ combos registered only while sharemask is capturing/presenting.
+        case sPanic = 10, sToggle = 11, sReveal = 12, sAllowlist = 13, sEnd = 14, sAllOn = 15, sKeys = 16
+        case sMask1 = 21, sMask2, sMask3, sMask4, sMask5, sMask6, sMask7, sMask8, sMask9
+        static let session: [Action] = [.sPanic, .sToggle, .sReveal, .sAllowlist, .sEnd, .sAllOn, .sKeys,
+                                        .sMask1, .sMask2, .sMask3, .sMask4, .sMask5, .sMask6, .sMask7, .sMask8, .sMask9]
+    }
 
     private var refs: [Action: EventHotKeyRef] = [:]
     private var handlerRef: EventHandlerRef?
