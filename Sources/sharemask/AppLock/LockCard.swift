@@ -1,4 +1,5 @@
 import AppKit
+import LocalAuthentication
 
 private final class KeyPanel: NSPanel {
     override var canBecomeKey: Bool { true }
@@ -12,6 +13,9 @@ final class LockCard: NSObject, NSTextFieldDelegate {
     private var field: NSSecureTextField?
     private var errorLabel: NSTextField?
     private var onResult: ((Bool) -> Void)?
+    private var authContext: LAContext?
+    /// Start the Touch ID / password prompt as soon as the card appears (no extra click).
+    var autoPrompt = true
     private(set) var subject: String?           // bundle ID or a purpose key ("quit", "settings")
     var config: () -> AppLockConfig = { AppLockConfig() }
     var isVisible: Bool { panel?.isVisible ?? false }
@@ -95,17 +99,27 @@ final class LockCard: NSObject, NSTextFieldDelegate {
         NSApp.activate(ignoringOtherApps: true)
         p.makeKeyAndOrderFront(nil)
         if let f = field { p.makeFirstResponder(f) }
-        Log.info("lock card: \(subject)")
+        Log.info("lock card: \(subject) (custom password \(hasCustom ? "set" : "not set"), auto prompt \(autoPrompt))")
+        if autoPrompt {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                guard let self = self, self.subject == subject else { return }
+                self.systemAuth()
+            }
+        }
     }
 
     @objc private func systemAuth() {
         let reason = subject.map { ["quit": "quit sharemask", "settings": "change App lock settings"][$0] ?? "unlock this app" } ?? "unlock"
-        Authenticator.system(reason: reason) { [weak self] ok in if ok { self?.close(result: true) } }
+        authContext?.invalidate()
+        authContext = Authenticator.system(reason: reason) { [weak self] ok in
+            if ok { Log.info("lock card \(self?.subject ?? "?"): unlocked via system prompt"); self?.close(result: true) }
+        }
     }
 
     @objc private func customAuth() {
         guard let f = field else { return }
         if Authenticator.customPassword(f.stringValue, config: config()) {
+            Log.info("lock card \(subject ?? "?"): unlocked via sharemask password")
             close(result: true)
         } else {
             f.stringValue = ""
@@ -124,6 +138,8 @@ final class LockCard: NSObject, NSTextFieldDelegate {
     @objc private func cancelTapped() { close(result: false) }
 
     func close(result: Bool) {
+        authContext?.invalidate()     // take down a still-open Touch ID prompt
+        authContext = nil
         let cb = onResult
         onResult = nil
         let s = subject

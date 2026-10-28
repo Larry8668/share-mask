@@ -71,6 +71,8 @@ struct HotkeyConfig: Equatable {
     var reveal: String?       // hold to temporarily unmask the frontmost app
     var allowlist: String?    // toggle allowlist mode
     var endShare: String?     // emergency: remove the virtual display (ends the share)
+    var lockAll: String?      // App lock: relock every app
+    var lockApp: String?      // App lock: lock the frontmost app
 }
 
 /// The fully-resolved in-memory form of ~/.config/sharemask/presets.json.
@@ -99,7 +101,9 @@ struct PresetConfig: Equatable {
                                                           pick: "cmd+shift+ctrl+P",
                                                           reveal: "cmd+shift+ctrl+R",
                                                           allowlist: "cmd+shift+ctrl+A",
-                                                          endShare: "cmd+shift+ctrl+X"),
+                                                          endShare: "cmd+shift+ctrl+X",
+                                                          lockAll: "cmd+shift+ctrl+L",
+                                                          lockApp: "cmd+ctrl+L"),
                                     pointerGuard: true, hud: false, captureMode: "ask", calendarLookahead: false)
 }
 
@@ -134,6 +138,8 @@ struct PresetFile: Codable {
         var reveal: String?
         var allowlist: String?
         var endShare: String?
+        var lockAll: String?
+        var lockApp: String?
     }
     struct Rule: Codable {
         var name: String?
@@ -220,7 +226,8 @@ extension PresetConfig {
         let e = PresetConfig.empty.hotkeys
         let hk = HotkeyConfig(panic: file.hotkeys?.panic ?? e.panic, toggle: file.hotkeys?.toggle ?? e.toggle,
                               pick: file.hotkeys?.pick ?? e.pick, reveal: file.hotkeys?.reveal ?? e.reveal,
-                              allowlist: file.hotkeys?.allowlist ?? e.allowlist, endShare: file.hotkeys?.endShare ?? e.endShare)
+                              allowlist: file.hotkeys?.allowlist ?? e.allowlist, endShare: file.hotkeys?.endShare ?? e.endShare,
+                              lockAll: file.hotkeys?.lockAll ?? e.lockAll, lockApp: file.hotkeys?.lockApp ?? e.lockApp)
         return PresetConfig(version: version, defaultMode: defaultMode, apps: apps, rules: rules,
                             allowlist: file.allowlist ?? [], maskNotifications: file.maskNotifications ?? true, hotkeys: hk,
                             pointerGuard: file.pointerGuard ?? true, hud: file.hud ?? false,

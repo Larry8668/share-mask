@@ -147,10 +147,22 @@ Lock apps on your own screen, so someone using your unlocked Mac can't open them
 ![Opening a locked app shows a Touch ID lock card; the App lock menu lists the apps](docs/applock.png)
 
 - **App lock ▸ Apps to lock**: tick apps. A locked app stays hidden; opening it (Dock, ⌘-Tab,
-  Spotlight) shows a lock card. Unlock with **Touch ID**, your **Mac login password** (always works,
-  so you can't lock yourself out), or an optional **sharemask password**.
-- **Relock** after the app has been in the background for a chosen time, when the screen locks or
-  sleeps, or right away with **Lock all now** (⌃⇧⌘L).
+  Spotlight) shows a lock card and the **Touch ID prompt starts by itself**. Your **Mac login
+  password** always works too (so you can't lock yourself out); an optional **sharemask password**
+  can be typed on the card instead.
+- **When it asks again** (relocks):
+
+  | You… | Asks again? |
+  |---|---|
+  | open an app that wasn't running | yes |
+  | close its window (red button), app stays in the Dock, then reopen | yes |
+  | quit or force-quit it, then reopen | yes |
+  | minimize it, then bring it back | no |
+  | leave it in the background longer than *Relock after* | yes |
+  | lock the screen / let the display sleep | yes (optional) |
+
+- **Shortcuts**: ⌃⌘L locks the app in front (adds it to the list if it isn't there yet), ⌃⇧⌘L
+  locks every app. Both are remappable in Settings ▸ Shortcuts.
 - **Require unlock to quit sharemask**: ⌘Q / Quit asks for Touch ID too. Shutdown, restart and
   logout are never blocked.
 - **Relaunch if force-quit**: a per-user login agent (`~/Library/LaunchAgents/dev.sharemask.keepalive.plist`,
