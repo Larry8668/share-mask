@@ -14,6 +14,11 @@ struct AppLockConfig: Codable, Equatable {
     var guardQuit = true                    // quitting sharemask needs authentication
     var keepAlive = true                    // login agent relaunches sharemask if force-quit
     var passwordHash: String?               // optional sharemask password: base64(salt) + ":" + base64(PBKDF2)
+    /// After an unlocked app's last window closes, relock after this many seconds (0 = instantly,
+    /// -1 = never). Optional so settings saved by older versions still decode (a missing key in a
+    /// non-optional field would make the whole saved config unreadable).
+    var closeRelockSeconds: Int?
+    var closeDelay: Int { closeRelockSeconds ?? 0 }
 }
 
 enum AppLockStore {
@@ -21,6 +26,12 @@ enum AppLockStore {
     /// Tests use a separate Keychain entry so they never touch the user's real App lock settings.
     private static let account = (CommandLine.arguments.contains("--lock-test-store")
         || ProcessInfo.processInfo.environment["SHAREMASK_LOCK_TEST_STORE"] != nil) ? "config-test" : "config"
+
+    static var hasSavedConfig: Bool {
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                kSecAttrAccount as String: account]
+        return SecItemCopyMatching(q as CFDictionary, nil) == errSecSuccess
+    }
 
     static func load() -> AppLockConfig {
         let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,

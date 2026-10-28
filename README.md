@@ -45,8 +45,11 @@ Applications, then right-click → Open the first time (the app is signed but no
 
 **From source**: `make identity && make run` (see Build below).
 
-On first launch a **welcome window** points at the menu-bar icon (a crossed eye) and has one-click
-buttons for the two permissions. Reopen it any time: Settings ▸ Setup & permissions…
+On first launch a short **welcome** (three pages) shows what sharemask does, gets the two
+permissions with one click each, and points at the menu-bar icon (a crossed eye). After that,
+opening sharemask from Finder, Launchpad or the Dock shows its **window**: a live status orb, big
+Start / Panic buttons, and cards for Masks, App lock and Present. The menu-bar icon has the same
+things for quick access. Reopen the welcome any time: Settings ▸ Setup & permissions…
 
 First launch: grant **Screen Recording** when asked (System Settings → Privacy & Security → Screen &
 System Audio Recording), then relaunch if macOS asks you to. The app lives in the menu bar as a
@@ -162,7 +165,7 @@ Lock apps on your own screen, so someone using your unlocked Mac can't open them
   | You… | Asks again? |
   |---|---|
   | open an app that wasn't running | yes |
-  | close its window (red button), app stays in the Dock, then reopen | yes |
+  | close its window (red button), app stays in the Dock, then reopen | yes, instantly (or after 30 s / 1 min / 5 min / never — your choice) |
   | quit or force-quit it, then reopen | yes |
   | minimize it, then bring it back | no |
   | leave it in the background longer than *Relock after* | yes |

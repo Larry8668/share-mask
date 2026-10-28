@@ -30,6 +30,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         var chooseScreen: (CGDirectDisplayID) -> Void
         var appLock: (String, String?) -> Void      // (command, argument)
         var showWelcome: () -> Void
+        var openMain: () -> Void
         var present: (CGDirectDisplayID, Bool) -> Void   // (tv, mirror?)
         var stopPresenting: () -> Void
         var showKeys: () -> Void
@@ -124,6 +125,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
         removeDisplayItem.title = "Remove proxy display now"
 
         // Header + essentials
+        let open = item("Open sharemask…", #selector(openMain), key: "o")
+        menu.addItem(open)
+        menu.addItem(.separator())
         menu.addItem(statusLine)
         menu.addItem(latencyLine)
         menu.addItem(warningLine)
@@ -454,6 +458,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         var enabled: Bool
         var apps: [(bundleID: String, name: String, locked: Bool, unlockedNow: Bool)]
         var relockMinutes: Int
+        var closeDelay: Int
         var relockOnSleep: Bool
         var guardQuit: Bool
         var keepAlive: Bool
@@ -496,7 +501,15 @@ final class MenuBar: NSObject, NSMenuDelegate {
         }
         rm.addItem(.separator())
         rm.addItem(cmd("Also when the screen locks or sleeps", "sleep", state: m.relockOnSleep))
+        relock.title = "Relock in the background after"
+        let close = NSMenuItem(title: "Relock when its window closes", action: nil, keyEquivalent: "")
+        let cm = NSMenu()
+        for (secs, label) in [(0, "Instantly"), (30, "After 30 seconds"), (60, "After 1 minute"), (300, "After 5 minutes"), (-1, "Never")] {
+            cm.addItem(cmd(label, "closeRelock", "\(secs)", state: m.closeDelay == secs))
+        }
+        close.submenu = cm
         relock.submenu = rm
+        menu.addItem(close)
         menu.addItem(relock)
         menu.addItem(cmd("Require unlock to quit sharemask", "guardQuit", state: m.guardQuit))
         menu.addItem(cmd("Relaunch sharemask if force-quit", "keepAlive", state: m.keepAlive))
@@ -505,6 +518,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     }
 
     @objc private func showWelcome() { actions.showWelcome() }
+    @objc private func openMain() { actions.openMain() }
 
     /// Opens the status item's menu (for "Show me the menu" in the welcome window).
     func openMenu() { item.button?.performClick(nil) }
