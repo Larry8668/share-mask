@@ -432,6 +432,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func pickRegion(pid: pid_t, bundleID: String) {
         guard picker == nil else { picker?.bringToFront(); return }
+        // The editor draws over the app's window, and a locked app is kept hidden: unlock first,
+        // then wait for its window to be back before opening the editor.
+        if locker.isLocked(bundleID), let app = NSRunningApplication(processIdentifier: pid) {
+            Log.info("picker: \(bundleID) is locked — asking to unlock before editing")
+            locker.promptUnlock(app, detail: "Unlock to edit what sharemask blurs in it.") { [weak self] in
+                self?.waitForWindow(app, attempts: 20) { self?.pickRegion(pid: pid, bundleID: bundleID) }
+            }
+            return
+        }
         let picker = RegionPicker(bundleID: bundleID, pid: pid,
                                   existing: config.config.apps[bundleID]?.regions ?? [])
         picker.onSave = { [weak self] bundleID, regions in
@@ -683,6 +692,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func vdSafe(_ p: Pipeline) -> Bool { p.virtualDisplay?.isSafeToPresent ?? true }
+
+    /// Calls `then` once the app has a window (checks every 0.1 s, gives up after `attempts`).
+    private func waitForWindow(_ app: NSRunningApplication, attempts: Int, then: @escaping () -> Void) {
+        if locker.windowCountFor(app) > 0 || attempts <= 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: then)   // let it finish appearing
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.waitForWindow(app, attempts: attempts - 1, then: then) }
+    }
 
     // MARK: Windows (main + onboarding)
 
@@ -1298,6 +1316,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             }
+        case "edit-locked":   // test: open the region editor for the (locked, hidden) test app
+            if let a = NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first {
+                pickRegion(pid: a.processIdentifier, bundleID: AppDelegate.testAppID)
+            }
+        case "picker-cancel": picker?.cancelForTesting()
         case "close-reopen-frontmost":   // the real case: app stays frontmost, window closed, reopened from the Dock
             NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first?.activate()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {

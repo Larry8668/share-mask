@@ -261,6 +261,7 @@ final class RegionPicker: NSObject {
     }
 
     @objc private func cancel() { Log.info("picker: cancelled"); close() }
+    func cancelForTesting() { cancel() }
 
     private func close() {
         trackTimer?.invalidate(); trackTimer = nil

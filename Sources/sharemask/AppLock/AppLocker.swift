@@ -318,10 +318,11 @@ final class AppLocker {
         Log.info("app lock: hid \(app.bundleIdentifier ?? "?")")
     }
 
-    func promptUnlock(_ app: NSRunningApplication) {
+    /// `detail` overrides the card's second line; `then` runs after a successful unlock.
+    func promptUnlock(_ app: NSRunningApplication, detail: String? = nil, then: (() -> Void)? = nil) {
         guard let b = app.bundleIdentifier else { return }
         let name = app.localizedName ?? b
-        card.show(subject: b, title: "\(name) is locked", detail: "Unlock to use it. It relocks \(relockText).",
+        card.show(subject: b, title: "\(name) is locked", detail: detail ?? "Unlock to use it. It relocks \(relockText).",
                   icon: app.icon) { [weak self] ok in
             guard ok, let self = self else { return }
             self.unlocked[b] = Date()
@@ -333,8 +334,12 @@ final class AppLocker {
             app.unhide()
             app.activate()
             self.onChange?()
+            then?()
         }
     }
+
+    /// Accessibility window count (incl. minimized), for callers that need to wait for a window.
+    func windowCountFor(_ app: NSRunningApplication) -> Int { windowCount(app) ?? 0 }
 
     var relockText: String {
         config.relockMinutes == 0 ? "as soon as you switch away" : "after \(config.relockMinutes) min in the background"
