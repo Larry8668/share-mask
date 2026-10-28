@@ -30,6 +30,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         var chooseScreen: (CGDirectDisplayID) -> Void
         var appLock: (String, String?) -> Void      // (command, argument)
         var showWelcome: () -> Void
+        var openMain: () -> Void
         var present: (CGDirectDisplayID, Bool) -> Void   // (tv, mirror?)
         var stopPresenting: () -> Void
         var showKeys: () -> Void
@@ -124,6 +125,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
         removeDisplayItem.title = "Remove proxy display now"
 
         // Header + essentials
+        let open = item("Open sharemask…", #selector(openMain), key: "o")
+        menu.addItem(open)
+        menu.addItem(.separator())
         menu.addItem(statusLine)
         menu.addItem(latencyLine)
         menu.addItem(warningLine)
@@ -505,6 +509,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     }
 
     @objc private func showWelcome() { actions.showWelcome() }
+    @objc private func openMain() { actions.openMain() }
 
     /// Opens the status item's menu (for "Show me the menu" in the welcome window).
     func openMenu() { item.button?.performClick(nil) }

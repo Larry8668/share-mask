@@ -1,159 +1,270 @@
 import AppKit
+import SwiftUI
 import ScreenCaptureKit
 import ApplicationServices
 
-/// First-run setup: sharemask has no window of its own (it lives in the menu bar), so without this
-/// a new user sees nothing after installing. Shows where the icon is, gets the two permissions
-/// with live ✓ status, and gives the four things to know. Reopen: Settings ▸ Setup & permissions…
+// MARK: - Illustration: your screen vs. what the call sees
+
+/// Two mini screens with the same chat list; on the "shared" one the list keeps re-pixellating.
+struct ShareIllustration: View {
+    @State private var tick = 0
+    let timer = Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()
+    private let rowColors: [Color] = [.teal, .pink, .indigo, .orange, .mint]
+
+    var body: some View {
+        HStack(spacing: 26) {
+            screen(label: "Your screen", masked: false)
+            Image(systemName: "arrow.right").font(.system(size: 20, weight: .semibold)).foregroundStyle(.secondary)
+                .offset(x: tick % 2 == 0 ? -2 : 2).animation(.easeInOut(duration: 0.35), value: tick)
+            screen(label: "What the call sees", masked: true)
+        }
+        .onReceive(timer) { _ in tick += 1 }
+    }
+
+    private func screen(label: String, masked: Bool) -> some View {
+        VStack(spacing: 8) {
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 10).fill(Color(white: 0.96))
+                HStack(spacing: 0) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(0..<5) { i in
+                            HStack(spacing: 6) {
+                                Circle().fill(rowColors[i]).frame(width: 14, height: 14)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Capsule().fill(Color.black.opacity(0.65)).frame(width: 46, height: 4)
+                                    Capsule().fill(Color.black.opacity(0.3)).frame(width: 34, height: 3)
+                                }
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .frame(width: 84, alignment: .topLeading)
+                    .overlay { if masked { pixels.transition(.opacity) } }
+                    Rectangle().fill(Color.black.opacity(0.06)).frame(width: 1)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Capsule().fill(Color.green.opacity(0.35)).frame(width: 60, height: 10)
+                        Capsule().fill(Color.white).frame(width: 74, height: 10).shadow(radius: 0.5)
+                        Capsule().fill(Color.green.opacity(0.35)).frame(width: 50, height: 10)
+                    }
+                    .padding(10)
+                }
+            }
+            .frame(width: 180, height: 116)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .shadow(color: .black.opacity(0.25), radius: 8, y: 3)
+            Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+        }
+    }
+
+    /// Coarse blocks whose shades shift every tick, like a live pixellated feed.
+    private var pixels: some View {
+        let cols = 6, rows = 8
+        return VStack(spacing: 0) {
+            ForEach(0..<rows, id: \.self) { r in
+                HStack(spacing: 0) {
+                    ForEach(0..<cols, id: \.self) { c in
+                        let v = Double(((r * 7 + c * 13 + tick * 3) % 9)) / 9.0
+                        Rectangle().fill(Color(hue: 0.55 + v * 0.3, saturation: 0.35, brightness: 0.65 + v * 0.3))
+                    }
+                }
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: tick)
+    }
+}
+
+// MARK: - Onboarding
+
+struct OnboardingView: View {
+    @ObservedObject var state: OnboardingState
+    var onDone: () -> Void
+    var onOpenMenu: () -> Void
+    var onRelaunch: () -> Void
+    @State private var page = 0
+    @State private var bounce = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                if page == 0 { intro.transition(slide) }
+                if page == 1 { permissions.transition(slide) }
+                if page == 2 { done.transition(slide) }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(.spring(response: 0.45, dampingFraction: 0.85), value: page)
+
+            HStack {
+                HStack(spacing: 6) {
+                    ForEach(0..<3) { i in
+                        Capsule().fill(i == page ? Color.accentColor : Color.secondary.opacity(0.3))
+                            .frame(width: i == page ? 18 : 7, height: 7)
+                    }
+                }
+                .animation(.spring(), value: page)
+                Spacer()
+                if page > 0 { Button("Back") { page -= 1 }.controlSize(.large) }
+                Button(page == 2 ? "Start using sharemask" : "Continue") {
+                    if page == 2 { onDone() } else { page += 1 }
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent).controlSize(.large)
+            }
+            .padding(20)
+        }
+        .frame(width: 600, height: 440)
+        .background(VisualEffect().ignoresSafeArea())
+    }
+
+    private var slide: AnyTransition {
+        .asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .move(edge: .leading).combined(with: .opacity))
+    }
+
+    private var intro: some View {
+        VStack(spacing: 20) {
+            Text("Share your screen,\nnot your chats").font(.system(size: 28, weight: .bold)).multilineTextAlignment(.center)
+            ShareIllustration()
+            Text("You pick what gets blurred. You see everything; the call sees the blur.")
+                .font(.system(size: 13)).foregroundStyle(.secondary)
+        }
+        .padding(.top, 30)
+    }
+
+    private var permissions: some View {
+        VStack(spacing: 18) {
+            Text("Two quick permissions").font(.system(size: 24, weight: .bold)).padding(.top, 30)
+            permissionCard(symbol: "rectangle.dashed.badge.record", tint: .red, title: "Screen Recording",
+                           note: "Required · nothing leaves your Mac", granted: state.screen,
+                           needsRelaunch: state.screenNeedsRelaunch, action: state.askScreen, relaunch: onRelaunch)
+            permissionCard(symbol: "hand.raised.fill", tint: .blue, title: "Accessibility",
+                           note: "Recommended · keeps windows tidy, powers App lock", granted: state.ax,
+                           needsRelaunch: false, action: state.askAX, relaunch: {})
+        }
+        .padding(.horizontal, 40)
+    }
+
+    private func permissionCard(symbol: String, tint: Color, title: String, note: String, granted: Bool,
+                                needsRelaunch: Bool, action: @escaping () -> Void, relaunch: @escaping () -> Void) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: symbol).font(.system(size: 20, weight: .semibold)).foregroundStyle(.white)
+                .frame(width: 44, height: 44).background(RoundedRectangle(cornerRadius: 11).fill(tint.gradient))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 15, weight: .semibold))
+                Text(note).font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if granted && !needsRelaunch {
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 26)).foregroundStyle(.green)
+                    .transition(.scale.combined(with: .opacity))
+            } else if needsRelaunch {
+                Button("Relaunch", action: relaunch).buttonStyle(.borderedProminent).tint(.green)
+            } else {
+                Button("Allow", action: action).buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 14).fill(.background.opacity(0.6)))
+        .animation(.spring(response: 0.4, dampingFraction: 0.6), value: granted)
+    }
+
+    private var done: some View {
+        VStack(spacing: 18) {
+            ZStack(alignment: .topTrailing) {
+                RoundedRectangle(cornerRadius: 12).fill(.background.opacity(0.6)).frame(width: 360, height: 120)
+                HStack(spacing: 10) {
+                    Image(systemName: "wifi"); Image(systemName: "battery.75")
+                    Image(systemName: "eye.slash.fill").foregroundStyle(.green)
+                        .padding(5).background(Circle().fill(Color.green.opacity(0.18)))
+                    Text("10:24").font(.system(size: 12, weight: .medium))
+                }
+                .font(.system(size: 13)).padding(10)
+                Image(systemName: "arrow.up.right").font(.system(size: 30, weight: .bold)).foregroundStyle(.green)
+                    .offset(x: -64, y: bounce ? 30 : 44)
+                    .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: bounce)
+            }
+            .padding(.top, 26)
+            .onAppear { bounce = true }
+            Text("Find it in your menu bar").font(.system(size: 22, weight: .bold))
+            HStack(spacing: 18) {
+                KeyChip(keys: "⌃⌥B", label: "panic")
+                KeyChip(keys: "⌃⌥R", label: "hold to reveal")
+                KeyChip(keys: "⌃⇧⌘L", label: "lock apps")
+            }
+            Button("Show me the menu", action: onOpenMenu).buttonStyle(.link)
+        }
+    }
+}
+
+final class OnboardingState: ObservableObject {
+    @Published var screen = false
+    @Published var ax = false
+    @Published var screenNeedsRelaunch = false
+    var askScreen: () -> Void = {}
+    var askAX: () -> Void = {}
+}
+
+// MARK: - Window
+
+/// First-run setup (and Settings ▸ Setup & permissions…). sharemask lives in the menu bar, so
+/// without this a new user would see nothing after installing.
 final class WelcomeWindow: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private var timer: Timer?
-    private var screenStatus = NSTextField(labelWithString: "")
-    private var axStatus = NSTextField(labelWithString: "")
-    private var screenButton: NSButton?
-    private var axButton: NSButton?
+    private let state = OnboardingState()
     var onOpenMenu: (() -> Void)?
     var onRelaunch: (() -> Void)?
+    var onFinished: (() -> Void)?
     private var screenGrantedAtOpen = false
 
     static let seenKey = "welcomeSeenVersion"
-    static let currentVersion = 1
+    static let currentVersion = 2
     static var shouldShowAutomatically: Bool {
         UserDefaults.standard.integer(forKey: seenKey) < currentVersion || !CGPreflightScreenCaptureAccess()
     }
+    /// Test/README only: show the window as a brand-new user sees it.
+    private let pretendFresh = ProcessInfo.processInfo.environment["SHAREMASK_PRETEND_NO_PERMISSIONS"] != nil
 
     var isVisible: Bool { window?.isVisible ?? false }
 
     func show() {
         if let w = window { NSApp.activate(ignoringOtherApps: true); w.makeKeyAndOrderFront(nil); return }
         screenGrantedAtOpen = CGPreflightScreenCaptureAccess() && !pretendFresh
-        let W: CGFloat = 560, H: CGFloat = 470
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: W, height: H), styleMask: [.titled, .closable],
-                         backing: .buffered, defer: false)
+        state.askScreen = {
+            Log.info("welcome: requesting Screen Recording")
+            if !CGRequestScreenCaptureAccess() {
+                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+            }
+        }
+        state.askAX = { Log.info("welcome: requesting Accessibility"); WindowEvacuator.requestTrust() }
+        let view = OnboardingView(state: state,
+                                  onDone: { [weak self] in self?.window?.close(); self?.onFinished?() },
+                                  onOpenMenu: { [weak self] in self?.onOpenMenu?() },
+                                  onRelaunch: { [weak self] in self?.markSeen(); self?.onRelaunch?() })
+        let w = NSWindow(contentViewController: NSHostingController(rootView: view))
         w.title = "Welcome to sharemask"
+        w.styleMask = [.titled, .closable, .fullSizeContentView]
+        w.titlebarAppearsTransparent = true
+        w.titleVisibility = .hidden
+        w.isMovableByWindowBackground = true
         w.isReleasedWhenClosed = false
         w.delegate = self
-        let v = NSView(frame: NSRect(x: 0, y: 0, width: W, height: H))
-
-        var y = H - 30
-        func text(_ s: String, size: CGFloat = 13, weight: NSFont.Weight = .regular, color: NSColor = .labelColor, x: CGFloat = 28, width: CGFloat? = nil, height: CGFloat = 18) -> NSTextField {
-            let t = NSTextField(wrappingLabelWithString: s)
-            t.font = .systemFont(ofSize: size, weight: weight); t.textColor = color
-            t.frame = NSRect(x: x, y: y - height, width: width ?? (W - x - 28), height: height)
-            v.addSubview(t)
-            return t
-        }
-
-        let icon = NSImageView(frame: NSRect(x: 28, y: y - 52, width: 52, height: 52))
-        icon.image = NSImage(named: NSImage.applicationIconName)
-        v.addSubview(icon)
-        _ = text("sharemask lives in your menu bar", size: 18, weight: .semibold, x: 92, height: 24)
-        y -= 26
-        let eye = NSImageView(frame: NSRect(x: 92, y: y - 18, width: 18, height: 18))
-        eye.image = NSImage(systemSymbolName: "eye.slash.fill", accessibilityDescription: nil)
-        eye.contentTintColor = .secondaryLabelColor
-        v.addSubview(eye)
-        _ = text("Look for the crossed eye at the top right of your screen. Everything is in its menu.",
-                 color: .secondaryLabelColor, x: 116, height: 32)
-        y -= 48
-
-        // Step 1: Screen Recording
-        y -= 8
-        _ = text("1  Allow Screen Recording  (required)", size: 14, weight: .semibold, height: 20)
-        y -= 22
-        _ = text("Needed to show a masked copy of your screen. Nothing leaves your Mac; frames are never saved.",
-                 color: .secondaryLabelColor, width: W - 28 - 180, height: 32)
-        let sb = NSButton(title: "Allow…", target: self, action: #selector(askScreen))
-        sb.bezelStyle = .rounded; sb.frame = NSRect(x: W - 28 - 110, y: y - 28, width: 110, height: 28)
-        v.addSubview(sb); screenButton = sb
-        screenStatus.frame = NSRect(x: W - 28 - 170, y: y - 24, width: 56, height: 18); screenStatus.alignment = .right
-        v.addSubview(screenStatus)
-        y -= 46
-
-        // Step 2: Accessibility
-        _ = text("2  Allow Accessibility  (recommended)", size: 14, weight: .semibold, height: 20)
-        y -= 22
-        _ = text("Lets sharemask move stray windows back to your screen and notice when a locked app's window closes.",
-                 color: .secondaryLabelColor, width: W - 28 - 180, height: 32)
-        let ab = NSButton(title: "Allow…", target: self, action: #selector(askAX))
-        ab.bezelStyle = .rounded; ab.frame = NSRect(x: W - 28 - 110, y: y - 28, width: 110, height: 28)
-        v.addSubview(ab); axButton = ab
-        axStatus.frame = NSRect(x: W - 28 - 170, y: y - 24, width: 56, height: 18); axStatus.alignment = .right
-        v.addSubview(axStatus)
-        y -= 50
-
-        // How to use it
-        _ = text("How to use it", size: 14, weight: .semibold, height: 20)
-        y -= 24
-        let tips = [
-            "In a call, sharemask asks to start. Then share the screen called “sharemask” in Zoom / Meet / Teams.",
-            "Choose what to blur: menu ▸ Edit regions ▸ pick an app, draw boxes, Save.",
-            "While sharing: ⌃⌥B blurs everything instantly, ⌃⌥K shows all keys.",
-            "Lock apps with Touch ID: menu ▸ App lock.",
-        ]
-        for t in tips {
-            _ = text("•  " + t, height: 34)
-            y -= 34
-        }
-
-        let done = NSButton(title: "Done", target: self, action: #selector(doneTapped))
-        done.bezelStyle = .rounded; done.keyEquivalent = "\r"
-        done.frame = NSRect(x: W - 28 - 100, y: 18, width: 100, height: 30)
-        v.addSubview(done)
-        let menu = NSButton(title: "Show me the menu", target: self, action: #selector(openMenu))
-        menu.bezelStyle = .rounded
-        menu.frame = NSRect(x: W - 28 - 100 - 12 - 160, y: 18, width: 160, height: 30)
-        v.addSubview(menu)
-
-        w.contentView = v
         w.center()
         window = w
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.refresh() }
         NSApp.activate(ignoringOtherApps: true)
         w.makeKeyAndOrderFront(nil)
-        Log.info("welcome window shown (screen recording \(screenGrantedAtOpen ? "granted" : "not granted"), accessibility \(AXIsProcessTrusted() ? "granted" : "not granted"))")
+        Log.info("welcome shown (screen recording \(screenGrantedAtOpen ? "granted" : "not granted"), accessibility \(AXIsProcessTrusted() ? "granted" : "not granted"))")
     }
-
-    /// Test/README only: show the window as a brand-new user sees it (nothing granted yet).
-    private let pretendFresh = ProcessInfo.processInfo.environment["SHAREMASK_PRETEND_NO_PERMISSIONS"] != nil
 
     private func refresh() {
         let screen = CGPreflightScreenCaptureAccess() && !pretendFresh
         let ax = AXIsProcessTrusted() && !pretendFresh
-        screenStatus.stringValue = screen ? "✓" : ""
-        screenStatus.textColor = .systemGreen
-        screenStatus.font = .systemFont(ofSize: 16, weight: .bold)
-        if screen && !screenGrantedAtOpen {
-            // macOS only applies a new Screen Recording grant after a relaunch.
-            screenButton?.title = "Relaunch"
-            screenButton?.action = #selector(relaunchTapped)
-        } else {
-            screenButton?.title = screen ? "Allowed" : "Allow…"
-            screenButton?.isEnabled = !screen
-        }
-        axStatus.stringValue = ax ? "✓" : ""
-        axStatus.textColor = .systemGreen
-        axStatus.font = .systemFont(ofSize: 16, weight: .bold)
-        axButton?.title = ax ? "Allowed" : "Allow…"
-        axButton?.isEnabled = !ax
+        if state.screen != screen { state.screen = screen }
+        if state.ax != ax { state.ax = ax }
+        // macOS only applies a new Screen Recording grant after a relaunch.
+        let relaunch = screen && !screenGrantedAtOpen
+        if state.screenNeedsRelaunch != relaunch { state.screenNeedsRelaunch = relaunch }
     }
-
-    @objc private func askScreen() {
-        Log.info("welcome: requesting Screen Recording")
-        if !CGRequestScreenCaptureAccess() {
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
-        }
-    }
-
-    @objc private func askAX() {
-        Log.info("welcome: requesting Accessibility")
-        WindowEvacuator.requestTrust()
-    }
-
-    @objc private func relaunchTapped() { markSeen(); onRelaunch?() }
-    @objc private func openMenu() { onOpenMenu?() }
-    @objc private func doneTapped() { window?.close() }
 
     private func markSeen() { UserDefaults.standard.set(WelcomeWindow.currentVersion, forKey: WelcomeWindow.seenKey) }
 
@@ -161,25 +272,39 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
         markSeen()
         timer?.invalidate(); timer = nil
         window = nil
-        Log.info("welcome window closed")
+        Log.info("welcome closed")
     }
 
-    /// Test/README helper: screenshot of the real on-screen window (ScreenCaptureKit), as users see it.
+    /// Test/README helper: screenshot of the real on-screen window (ScreenCaptureKit).
     func snapshot(to path: String) {
         guard let w = window else { return }
-        let id = CGWindowID(w.windowNumber)
+        WindowSnapshot.capture(windowNumber: w.windowNumber, to: path)
+    }
+
+    /// Test helper: advance the onboarding by sending Return (the default button).
+    func pressDefault() {
+        guard let w = window else { return }
+        let ev = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: w.windowNumber,
+                                  context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)
+        if let e = ev { w.sendEvent(e) }
+    }
+}
+
+/// Screenshot of one of our own windows, as it really renders (cacheDisplay drops SwiftUI/text).
+enum WindowSnapshot {
+    static func capture(windowNumber: Int, to path: String) {
+        let id = CGWindowID(windowNumber)
         Task {
             do {
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-                guard let sw = content.windows.first(where: { $0.windowID == id }) else { Log.error("welcome snapshot: window not found"); return }
+                guard let sw = content.windows.first(where: { $0.windowID == id }) else { Log.error("snapshot: window not found"); return }
                 let cfg = SCStreamConfiguration()
                 cfg.width = Int(sw.frame.width * 2); cfg.height = Int(sw.frame.height * 2)
                 cfg.captureResolution = .best; cfg.showsCursor = false
                 let img = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(desktopIndependentWindow: sw), configuration: cfg)
-                let rep = NSBitmapImageRep(cgImage: img)
-                try rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
-                Log.info("welcome snapshot written to \(path)")
-            } catch { Log.error("welcome snapshot failed: \(error)") }
+                try NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                Log.info("snapshot written to \(path)")
+            } catch { Log.error("snapshot failed: \(error)") }
         }
     }
 }

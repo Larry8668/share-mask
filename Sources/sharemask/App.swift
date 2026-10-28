@@ -94,6 +94,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let updates = UpdateChecker()
     private let keysPanel = KeysPanel()
     private let welcome = WelcomeWindow()
+    let model = AppModel()
+    private lazy var mainWindow = MainWindowController(model: model)
+    /// Marker left by an instance that handed over to the keep-alive agent after the user opened
+    /// sharemask by hand, so the agent's instance knows to show the window.
+    static let showWindowMarker = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Caches/sharemask-show-window")
     private var sessionKeysOn = false
     private var shownKeysThisLaunch = false
     private var knownExternals: Set<String> = []
@@ -126,8 +131,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private var lastOtherFront: NSRunningApplication?
 
+    /// Captured before anything else so the launch Apple event is still current.
+    private lazy var launchedByUserAtStart: Bool = launchedByUser
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
+        _ = launchedByUserAtStart
         // App lock first: a relaunch after a force-quit must re-hide locked apps immediately.
         locker.onChange = { [weak self] in self?.syncLockState() }
         locker.start()
@@ -169,17 +178,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             chooseScreen: { [weak self] id in self?.chooseScreen(id) },
             appLock: { [weak self] c, arg in self?.appLockCommand(c, arg) },
             showWelcome: { [weak self] in self?.welcome.show() },
+            openMain: { [weak self] in self?.mainWindow.show() },
             present: { [weak self] tv, mirror in self?.present(tv: tv, mirror: mirror) },
             stopPresenting: { [weak self] in self?.stopPresenting() },
             showKeys: { [weak self] in self?.keysPanel.show(on: self?.launch.source.id ?? CGMainDisplayID()) },
             checkUpdates: { [weak self] in self?.updates.check(manual: true) },
-            updateNow: { [weak self] in
-                guard let self = self else { return }
-                self.locker.authorize("settings", title: "Update sharemask", detail: "sharemask will quit and relaunch.") {
-                    self.quitAllowed = true
-                    self.updates.updateNow()
-                }
-            },
+            updateNow: { [weak self] in self?.updateNowGuarded() },
             copyUpdateCommand: { [weak self] in self?.updates.copyCommand() },
             openReleasePage: { [weak self] in self?.updates.openReleasePage() },
             toggleUpdateChecks: { [weak self] in self?.updates.enabled.toggle(); self?.refreshMenu() },
@@ -251,9 +255,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self?.screensChanged() }
         }
         welcome.onOpenMenu = { [weak self] in self?.menuBar.openMenu() }
+        welcome.onFinished = { [weak self] in self?.mainWindow.show() }
+        wireModelActions()
+        updateModel()
         welcome.onRelaunch = { [weak self] in self?.relaunch() }
-        if WelcomeWindow.shouldShowAutomatically || CommandLine.arguments.contains("--welcome") {
+        if CommandLine.arguments.contains("--show-main") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.mainWindow.show() }
+        } else if WelcomeWindow.shouldShowAutomatically || CommandLine.arguments.contains("--welcome") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.welcome.show() }
+        } else if launchedByUserAtStart || CommandLine.arguments.contains("--show-main") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.mainWindow.show() }
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--snapshot-main"), i + 1 < CommandLine.arguments.count {
+            let path = CommandLine.arguments[i + 1]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                if let n = self?.mainWindow.windowNumber { WindowSnapshot.capture(windowNumber: n, to: path) }
+            }
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--welcome-pages"), i + 1 < CommandLine.arguments.count {
+            // test: snapshot each onboarding page: --welcome-pages DIR
+            let dir = CommandLine.arguments[i + 1]
+            for page in 0..<3 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0 + Double(page) * 3.0) { [weak self] in
+                    self?.welcome.snapshot(to: "\(dir)/welcome-\(page + 1).png")
+                }
+                if page < 2 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3.2 + Double(page) * 3.0) { [weak self] in self?.welcome.pressDefault() }
+                }
+            }
         }
         if let i = CommandLine.arguments.firstIndex(of: "--snapshot-welcome"), i + 1 < CommandLine.arguments.count {
             let path = CommandLine.arguments[i + 1]
@@ -592,6 +621,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if p.state.isRunning, let m = meetings { latency += "\n" + m.statusText }
         }
 
+        updateModel()
         menuBar.updateAppLock(appLockModel())
         menuBar.updatePresent(AppDelegate.externalScreens(), active: pipeline?.output ?? .proxy)
         menuBar.updateScreens(AppDelegate.shareableScreens(), selected: pipeline?.source.id ?? CGMainDisplayID())
@@ -618,6 +648,125 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func vdSafe(_ p: Pipeline) -> Bool { p.virtualDisplay?.isSafeToPresent ?? true }
 
+    // MARK: Windows (main + onboarding)
+
+    private func updateNowGuarded() {
+        locker.authorize("settings", title: "Update sharemask", detail: "sharemask will quit and relaunch.") { [weak self] in
+            self?.quitAllowed = true
+            self?.updates.updateNow()
+        }
+    }
+
+    private func wireModelActions() {
+        var a = AppModel.Actions()
+        a.toggleCapture = { [weak self] in self?.toggleProxy() }
+        a.panic = { [weak self] in self?.togglePanic() }
+        a.toggleRegions = { [weak self] in self?.toggleRegions() }
+        a.toggleMask = { [weak self] b in self?.toggleMask(b) }
+        a.editRegions = { [weak self] b in
+            guard let self = self else { return }
+            let pid = NSRunningApplication.runningApplications(withBundleIdentifier: b).first?.processIdentifier ?? 0
+            if pid == 0 {
+                let n = NSWorkspace.shared.urlForApplication(withBundleIdentifier: b).flatMap { Bundle(url: $0)?.infoDictionary?["CFBundleName"] as? String } ?? b
+                self.alert("Open \(n) first", "The region editor draws on top of the app's window, so the app needs to be open.")
+                return
+            }
+            NSRunningApplication.runningApplications(withBundleIdentifier: b).first?.activate()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.pickRegion(pid: pid, bundleID: b) }
+        }
+        a.toggleLock = { [weak self] in self?.appLockCommand("toggle", nil) }
+        a.toggleLockApp = { [weak self] b in self?.appLockCommand("app", b) }
+        a.present = { [weak self] tv, mirror in self?.present(tv: tv, mirror: mirror) }
+        a.stopPresenting = { [weak self] in self?.stopPresenting() }
+        a.askScreen = { _ = CGRequestScreenCaptureAccess() }
+        a.askAX = { WindowEvacuator.requestTrust() }
+        a.preview = { [weak self] in self?.togglePreview() }
+        a.shortcuts = { [weak self] in self?.keysPanel.show(on: self?.launch.source.id ?? CGMainDisplayID()) }
+        a.update = { [weak self] in self?.updateNowGuarded() }
+        a.openMenu = { [weak self] in self?.menuBar.openMenu() }
+        model.actions = a
+    }
+
+    /// Copies current state into the SwiftUI model (called from refreshMenu, i.e. ≥ once a second).
+    private func updateModel() {
+        guard let p = pipeline else { return }
+        let m = model
+        let phase: AppModel.Phase
+        var title: String, subtitle: String
+        switch p.state {
+        case .running where p.panic: phase = .panic; title = "Panic"; subtitle = "Everything you share is pixellated. Press Restore or ⌃⌥B."
+        case .running where p.output != .proxy:
+            phase = .presenting; title = "Presenting"
+            subtitle = "Masks are applied on \(AppDelegate.externalScreens().first { $0.id == p.output.tv }?.name ?? "the TV")."
+        case .running: phase = .live; title = "Live"; subtitle = "In your call, share the screen called “sharemask”."
+        case .starting: phase = .starting; title = "Starting…"; subtitle = "Creating the sharemask display."
+        case .error(let e): phase = .error; title = "Needs attention"; subtitle = e
+        default:
+            phase = .standby; title = "Standby"
+            let s = meetings?.statusText ?? ""
+            subtitle = s.hasPrefix("no meeting") || s.isEmpty ? "sharemask starts when a call begins, or press Start." : s.capitalizedFirst
+        }
+        if m.phase != phase { m.phase = phase }
+        if m.title != title { m.title = title }
+        if m.subtitle != subtitle { m.subtitle = subtitle }
+        let lat = phase == .live || phase == .presenting || phase == .panic
+            ? String(format: "%.0f fps · %.0f ms", p.clock.summary().fps, p.clock.summary().captureToPresentP95) : ""
+        if m.latency != lat { m.latency = lat }
+        if m.regionsOn != p.regionsEnabled { m.regionsOn = p.regionsEnabled }
+
+        func name(_ b: String) -> String {
+            NSRunningApplication.runningApplications(withBundleIdentifier: b).first?.localizedName
+                ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: b).flatMap { Bundle(url: $0)?.infoDictionary?["CFBundleName"] as? String } ?? b
+        }
+        let masks = config.config.apps.keys.sorted().map { b -> AppModel.AppItem in
+            let n = config.config.apps[b]?.regions.count ?? 0
+            return .init(id: b, name: name(b), on: !options.disabled.contains(b), detail: "\(n) region\(n == 1 ? "" : "s")")
+        }
+        if m.maskApps != masks { m.maskApps = masks }
+        let lm = appLockModel()
+        if m.lockOn != lm.enabled { m.lockOn = lm.enabled }
+        let locks = lm.apps.map { AppModel.AppItem(id: $0.bundleID, name: $0.name, on: $0.locked, detail: $0.unlockedNow ? "unlocked" : "") }
+        if m.lockApps != locks { m.lockApps = locks }
+        let screens = AppDelegate.externalScreens().map { AppModel.Screen(id: $0.id, name: $0.name) }
+        if m.screens != screens { m.screens = screens }
+        let tv = p.output.tv
+        if m.presentingTo != tv { m.presentingTo = tv }
+        var mirror = false
+        if case .mirror = p.output { mirror = true }
+        if m.presentingMirror != mirror { m.presentingMirror = mirror }
+        let running = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular && $0.bundleIdentifier != nil && $0.bundleIdentifier != Bundle.main.bundleIdentifier }
+            .map { AppModel.AppItem(id: $0.bundleIdentifier!, name: $0.localizedName ?? $0.bundleIdentifier!, on: false, detail: "") }
+            .sorted { $0.name.lowercased() < $1.name.lowercased() }
+        if m.runningApps != running { m.runningApps = running }
+        let ver = UpdateChecker.currentVersion
+        if m.version != ver { m.version = ver }
+        var upd: String?
+        if case .available(let v) = updates.status { upd = v }
+        if m.updateAvailable != upd { m.updateAvailable = upd }
+        if m.keys.isEmpty {
+            m.keys = [("⌃⌥B", "panic"), ("⌃⌥R", "hold to reveal"), ("⌃⌥M", "masks on/off"), ("⌃⇧⌘L", "lock apps")]
+        }
+    }
+
+    /// Opened by the user (Finder, Launchpad, Dock) → show the window. Not at login, not when
+    /// relaunched by the keep-alive agent after a force-quit, not in tests.
+    private var launchedByUser: Bool {
+        if FileManager.default.fileExists(atPath: AppDelegate.showWindowMarker.path) {
+            try? FileManager.default.removeItem(at: AppDelegate.showWindowMarker)
+            return true
+        }
+        if KeepAlive.runningUnderAgent || CommandLine.arguments.contains("--script") || CommandLine.arguments.contains("--no-handover") { return false }
+        let ev = NSAppleEventManager.shared().currentAppleEvent
+        let loginItem = ev?.eventID == kAEOpenApplication && ev?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem
+        return !loginItem
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        mainWindow.show()
+        return true
+    }
+
     // MARK: App lock
 
     private func syncLockState() {
@@ -633,6 +782,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if want && !KeepAlive.runningUnderAgent {
             if KeepAlive.installedExecutable != exe || !KeepAlive.isLoaded { KeepAlive.install() } else { KeepAlive.kickstart() }
             Log.info("handing over to the keep-alive agent")
+            if launchedByUserAtStart { FileManager.default.createFile(atPath: AppDelegate.showWindowMarker.path, contents: nil) }
             quitAllowed = true
             DispatchQueue.main.async { exit(0) }
             return true
@@ -1102,4 +1252,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         a.runModal()
     }
+}
+
+extension String {
+    var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
 }
