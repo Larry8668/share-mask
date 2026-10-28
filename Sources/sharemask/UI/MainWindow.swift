@@ -406,14 +406,20 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         Log.info("main window shown")
     }
 
+    /// Asked when the window closes: should this app get focus next? (Not a locked app: handing it
+    /// focus would pop its Touch ID card, which looked like "quit sharemask?".)
+    var nextFocus: (() -> NSRunningApplication?)?
+
     func windowWillClose(_ notification: Notification) {
         Log.info("main window closed")
+        if let next = nextFocus?() { next.activate() }
         // Free the SwiftUI view so nothing keeps updating or animating while it's closed.
         DispatchQueue.main.async { self.window?.contentViewController = nil; self.window = nil }
         DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) }
     }
 
     var windowNumber: Int? { window?.windowNumber }
+    func closeForTesting() { window?.performClose(nil) }
 }
 
 
