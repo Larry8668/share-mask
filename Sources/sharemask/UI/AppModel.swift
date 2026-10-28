@@ -23,6 +23,7 @@ final class AppModel: ObservableObject {
     @Published var maskApps: [AppItem] = []
     @Published var lockOn = false
     @Published var lockCloseDelay = 0      // seconds; 0 instantly, -1 never
+    @Published var lockHidesNotifications = false
     @Published var lockApps: [AppItem] = []
     @Published var screens: [Screen] = []
     @Published var presentingTo: UInt32?
@@ -44,6 +45,7 @@ final class AppModel: ObservableObject {
         var toggleLockApp: (String) -> Void = { _ in }
         var setCloseDelay: (Int) -> Void = { _ in }
         var lockNow: (String) -> Void = { _ in }
+        var toggleHideNotifications: () -> Void = {}
         var chooseAppToLock: () -> Void = {}
         var present: (UInt32, Bool) -> Void = { _, _ in }
         var stopPresenting: () -> Void = {}

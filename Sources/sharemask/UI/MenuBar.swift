@@ -459,6 +459,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         var apps: [(bundleID: String, name: String, locked: Bool, unlockedNow: Bool)]
         var relockMinutes: Int
         var closeDelay: Int
+        var hideNotifications: Bool
         var relockOnSleep: Bool
         var guardQuit: Bool
         var keepAlive: Bool
@@ -511,6 +512,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         relock.submenu = rm
         menu.addItem(close)
         menu.addItem(relock)
+        menu.addItem(cmd("Hide notification previews from locked apps", "hideNotifs", state: m.hideNotifications))
         menu.addItem(cmd("Require unlock to quit sharemask", "guardQuit", state: m.guardQuit))
         menu.addItem(cmd("Relaunch sharemask if force-quit", "keepAlive", state: m.keepAlive))
         menu.addItem(cmd(m.hasPassword ? "Change sharemask password…" : "Set a sharemask password…", "password"))

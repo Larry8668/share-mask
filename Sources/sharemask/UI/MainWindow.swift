@@ -249,17 +249,23 @@ struct MainView: View {
                 .menuStyle(.borderlessButton).fixedSize().font(.system(size: 12))
                 Spacer()
                 Menu {
-                    ForEach(AppModel.closeDelayChoices, id: \.0) { c in
-                        Button { model.actions.setCloseDelay(c.0) } label: {
-                            if c.0 == model.lockCloseDelay { Label(c.1, systemImage: "checkmark") } else { Text(c.1) }
+                    Section("Lock again when its window closes") {
+                        ForEach(AppModel.closeDelayChoices, id: \.0) { c in
+                            Button { model.actions.setCloseDelay(c.0) } label: {
+                                if c.0 == model.lockCloseDelay { Label(c.1, systemImage: "checkmark") } else { Text(c.1) }
+                            }
                         }
                     }
+                    Divider()
+                    Button { model.actions.toggleHideNotifications() } label: {
+                        if model.lockHidesNotifications { Label("Hide notification previews", systemImage: "checkmark") }
+                        else { Text("Hide notification previews") }
+                    }
                 } label: {
-                    Label("Lock on close: \(AppModel.closeDelayChoices.first { $0.0 == model.lockCloseDelay }?.1.lowercased() ?? "instantly")",
-                          systemImage: "xmark.circle")
+                    Label("Options", systemImage: "slider.horizontal.3")
                 }
                 .menuStyle(.borderlessButton).fixedSize().font(.system(size: 11))
-                .help("When a locked app's window is closed, lock it again")
+                .help("When to lock again, and notification previews")
             }
         }
     }

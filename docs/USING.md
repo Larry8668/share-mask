@@ -89,6 +89,13 @@ press Start).
 Launch flags: `--demo` adds a hard-coded pixellate rect at (100,100,400,300) px for testing;
 `--probe` runs the display diagnostics CLI.
 
+## Notification banners while sharing
+
+"Notification banners" (Masks ▸, on by default) blacks out any banner that appears while you share.
+sharemask reads each banner's position through Accessibility and masks just that box; without
+Accessibility it masks Notification Center's whole window (on recent macOS that's the full
+screen, so the feed goes black for a few seconds — granting Accessibility avoids that).
+
 See also: [App lock](APP-LOCK.md) · [Presenting in a room](PRESENTING.md) · [Configuration](CONFIGURATION.md)
 
 ---

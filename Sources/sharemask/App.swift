@@ -103,6 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let updates = UpdateChecker()
     private let keysPanel = KeysPanel()
     private let welcome = WelcomeWindow()
+    private let notifications = NotificationWatcher()
     private var isNewUser = false
     let model = AppModel()
     private lazy var mainWindow = MainWindowController(model: model)
@@ -118,6 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var effectiveOptions: ResolveOptions {
         var o = options
         if locker.isActive { o.forceMasked = Set(locker.config.apps) }
+        if !notifications.unreadable { o.notificationBanners = notifications.banners.map { $0.frame } }
         return o
     }
     private var refreshTimer: Timer?
@@ -151,6 +153,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // App lock first: a relaunch after a force-quit must re-hide locked apps immediately.
         locker.onChange = { [weak self] in self?.syncLockState() }
         locker.start()
+        notifications.onChange = { [weak self] _ in
+            guard let self = self else { return }
+            self.pipeline?.options = self.effectiveOptions
+        }
+        notifications.start()
+        syncNotificationCovers()
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
             if let a = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, a.bundleIdentifier != Bundle.main.bundleIdentifier { self?.lastOtherFront = a }
         }
@@ -690,6 +698,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         a.toggleLockApp = { [weak self] b in self?.appLockCommand("app", b) }
         a.setCloseDelay = { [weak self] v in self?.appLockCommand("closeRelock", "\(v)") }
         a.lockNow = { [weak self] b in self?.locker.lockNow(b) }
+        a.toggleHideNotifications = { [weak self] in self?.appLockCommand("hideNotifs", nil) }
         a.chooseAppToLock = { [weak self] in
             let panel = NSOpenPanel()
             panel.title = "Choose an app to lock"
@@ -754,6 +763,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let lm = appLockModel()
         if m.lockOn != lm.enabled { m.lockOn = lm.enabled }
         if m.lockCloseDelay != locker.config.closeDelay { m.lockCloseDelay = locker.config.closeDelay }
+        if m.lockHidesNotifications != locker.config.hidesNotifications { m.lockHidesNotifications = locker.config.hidesNotifications }
         let locks = lm.apps.map { AppModel.AppItem(id: $0.bundleID, name: $0.name, on: $0.locked, detail: $0.unlockedNow ? "unlocked" : "") }
         if m.lockApps != locks { m.lockApps = locks }
         let screens = AppDelegate.externalScreens().map { AppModel.Screen(id: $0.id, name: $0.name) }
@@ -800,7 +810,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func syncLockState() {
         pipeline?.options = effectiveOptions
+        syncNotificationCovers()
         refreshMenu()
+    }
+
+    /// Which banners to cover on the user's own screen: those of apps that are locked right now,
+    /// matched by the app name Notification Center shows. Off unless App lock ▸ Hide notification previews.
+    private func syncNotificationCovers() {
+        guard locker.isActive, locker.config.hidesNotifications else { notifications.coverApps = [:]; return }
+        var map: [String: String] = [:]
+        for b in locker.config.apps where locker.isLocked(b) {
+            let running = NSRunningApplication.runningApplications(withBundleIdentifier: b).first?.localizedName
+            let bundleName = NSWorkspace.shared.urlForApplication(withBundleIdentifier: b).flatMap { Bundle(url: $0) }
+            for n in [running, bundleName?.infoDictionary?["CFBundleDisplayName"] as? String, bundleName?.infoDictionary?["CFBundleName"] as? String].compactMap({ $0 }) {
+                map[n] = b
+            }
+        }
+        notifications.coverApps = map
     }
 
     /// If App lock wants the keep-alive agent and this instance wasn't started by it, start the
@@ -838,7 +864,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: b).flatMap { Bundle(url: $0)?.infoDictionary?["CFBundleName"] as? String } ?? b
             return (b, name, c.apps.contains(b), unlockedNow.contains(b))
         }.sorted { ($0.locked ? 0 : 1, $0.name.lowercased()) < ($1.locked ? 0 : 1, $1.name.lowercased()) }
-        return .init(enabled: c.enabled, apps: apps, relockMinutes: c.relockMinutes, closeDelay: c.closeDelay, relockOnSleep: c.relockOnSleep,
+        return .init(enabled: c.enabled, apps: apps, relockMinutes: c.relockMinutes, closeDelay: c.closeDelay,
+                     hideNotifications: c.hidesNotifications, relockOnSleep: c.relockOnSleep,
                      guardQuit: c.guardQuit, keepAlive: c.keepAlive, hasPassword: c.passwordHash != nil)
     }
 
@@ -876,6 +903,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let m = Int(arg ?? "5") ?? 5
             if m < locker.config.relockMinutes || !locker.isActive { locker.update { $0.relockMinutes = m } }
             else { change { [weak self] in self?.locker.update { $0.relockMinutes = m } } }
+        case "hideNotifs":
+            if !locker.config.hidesNotifications { locker.update { $0.hideNotifications = true } }
+            else { change { [weak self] in self?.locker.update { $0.hideNotifications = false } } }
         case "closeRelock":
             let v = Int(arg ?? "0") ?? 0
             let cur = locker.config.closeDelay
@@ -1153,6 +1183,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         case "delay-30": locker.update { $0.closeRelockSeconds = 30 }
         case "delay-instant": locker.update { $0.closeRelockSeconds = 0 }
+        case "lock-notif-test":   // test: lock Script Editor (osascript's notifications) with previews hidden
+            locker.update { $0.enabled = true; $0.apps = ["com.apple.ScriptEditor2"]; $0.keepAlive = false; $0.hideNotifications = true }
+        case "snap-banner":       // test: screenshot of the screen area of the first banner (what the user sees)
+            guard let b = notifications.banners.first else { Log.error("snap-banner: no banner"); break }
+            let path = (ProcessInfo.processInfo.environment["SHAREMASK_SNAP_DIR"] ?? NSTemporaryDirectory()) + "/banner.png"
+            if #available(macOS 15.2, *) {
+                SCScreenshotManager.captureImage(in: b.frame.insetBy(dx: -10, dy: -10)) { img, err in
+                    guard let img = img else { Log.error("snap-banner failed: \(String(describing: err))"); return }
+                    try? NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    Log.info("snap-banner written to \(path)")
+                }
+            }
+        case "dump-overlays":   // research: every non-normal-layer window right now
+            var cache: [pid_t: String?] = [:]
+            for w in WindowTracker.copyOnScreenWindows(bundleCache: &cache) where w.layer != 0 {
+                let owner = NSRunningApplication(processIdentifier: w.pid)?.localizedName ?? "pid \(w.pid)"
+                Log.info("overlay win \(w.windowID) owner=\(owner) bundle=\(w.bundleID ?? "?") layer=\(w.layer) bounds=\(Int(w.boundsPoints.minX)),\(Int(w.boundsPoints.minY)) \(Int(w.boundsPoints.width))x\(Int(w.boundsPoints.height)) title=\(w.title ?? "")")
+            }
+        case "dump-nc":   // research: what can we see of notification banners?
+            var cache: [pid_t: String?] = [:]
+            for w in WindowTracker.copyOnScreenWindows(bundleCache: &cache) where w.bundleID == RegionResolver.notificationCenterBundleID {
+                Log.info("nc window \(w.windowID) layer=\(w.layer) bounds=\(w.boundsPoints) title=\(w.title ?? "")")
+            }
+            if let nc = NSRunningApplication.runningApplications(withBundleIdentifier: RegionResolver.notificationCenterBundleID).first {
+                func dump(_ el: AXUIElement, _ depth: Int) {
+                    guard depth < 9 else { return }
+                    func attr(_ a: String) -> String? {
+                        var v: CFTypeRef?
+                        guard AXUIElementCopyAttributeValue(el, a as CFString, &v) == .success, let x = v else { return nil }
+                        if let str = x as? String { return str.isEmpty ? nil : str }
+                        return nil
+                    }
+                    let role = attr(kAXRoleAttribute) ?? "?"
+                    if role == "AXMenuBar" { return }
+                    var posV: CFTypeRef?, sizeV: CFTypeRef?
+                    var frame = ""
+                    if AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &posV) == .success,
+                       AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sizeV) == .success {
+                        var p = CGPoint.zero, sz = CGSize.zero
+                        AXValueGetValue(posV as! AXValue, .cgPoint, &p); AXValueGetValue(sizeV as! AXValue, .cgSize, &sz)
+                        frame = " @\(Int(p.x)),\(Int(p.y)) \(Int(sz.width))x\(Int(sz.height))"
+                    }
+                    let bits = [attr(kAXTitleAttribute).map { "title=\($0)" }, attr(kAXValueAttribute).map { "value=\($0)" },
+                                attr(kAXDescriptionAttribute).map { "desc=\($0)" }, attr(kAXIdentifierAttribute).map { "id=\($0)" },
+                                attr(kAXSubroleAttribute).map { "sub=\($0)" }].compactMap { $0 }.joined(separator: " ")
+                    Log.info("nc ax " + String(repeating: "  ", count: depth) + role + frame + " " + bits)
+                    var kids: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &kids) == .success, let k = kids as? [AXUIElement] {
+                        for c in k { dump(c, depth + 1) }
+                    }
+                }
+                dump(AXUIElementCreateApplication(nc.processIdentifier), 0)
+            }
         case "close-reopen-frontmost":   // the real case: app stays frontmost, window closed, reopened from the Dock
             NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first?.activate()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {

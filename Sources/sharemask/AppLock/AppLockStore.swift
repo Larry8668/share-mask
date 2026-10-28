@@ -19,6 +19,9 @@ struct AppLockConfig: Codable, Equatable {
     /// non-optional field would make the whole saved config unreadable).
     var closeRelockSeconds: Int?
     var closeDelay: Int { closeRelockSeconds ?? 0 }
+    /// Cover notification banners from locked apps on your own screen (off by default).
+    var hideNotifications: Bool?
+    var hidesNotifications: Bool { hideNotifications ?? false }
 }
 
 enum AppLockStore {

@@ -23,6 +23,11 @@ Lock apps on your own screen, so someone using your unlocked Mac can't open them
   | leave it in the background longer than *Relock after* | yes |
   | lock the screen / let the display sleep | yes (optional) |
 
+- **Notification previews** (off by default; App lock ▸ Options ▸ *Hide notification previews*):
+  a banner from a locked app is covered on your screen by "WhatsApp — New notification — unlock to
+  read". Clicking it opens the app, which then asks for Touch ID. sharemask reads banners through
+  Accessibility, ten times a second while one is showing, so the very first frames of a banner
+  sliding in may still be readable.
 - **Shortcuts**: ⌃⌘L locks the app in front (adds it to the list if it isn't there yet), ⌃⇧⌘L
   locks every app. Both are remappable in Settings ▸ Shortcuts.
 - **Require unlock to quit sharemask**: ⌘Q / Quit asks for Touch ID too. Shutdown, restart and

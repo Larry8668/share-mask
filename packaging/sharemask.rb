@@ -14,7 +14,7 @@ cask "sharemask" do
 
   url "https://github.com/Larry8668/share-mask/releases/download/v#{version}/sharemask-#{version}.zip"
   name "sharemask"
-  desc "Share your screen with chosen app regions pixellated only on the shared feed"
+  desc "Blur chosen apps in screen shares and lock apps behind Touch ID"
   homepage "https://github.com/Larry8668/share-mask"
 
   depends_on macos: :sonoma
