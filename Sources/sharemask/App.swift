@@ -799,9 +799,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var upd: String?
         if case .available(let v) = updates.status { upd = v }
         if m.updateAvailable != upd { m.updateAvailable = upd }
+        if CommandLine.arguments.contains("--demo-model") { applyDemoModel(); return }   // README screenshots
         if m.keys.isEmpty {
             m.keys = [("⌃⌥B", "panic"), ("⌃⌥R", "hold to reveal"), ("⌃⌥M", "masks on/off"), ("⌃⇧⌘L", "lock apps")]
         }
+    }
+
+    /// Made-up content for the README screenshot (never shown in normal use).
+    private func applyDemoModel() {
+        let m = model
+        m.phase = .live; m.title = "Live"; m.subtitle = "In your call, share the screen called “sharemask”."
+        m.latency = "60 fps · 6 ms"; m.regionsOn = true
+        m.maskApps = [.init(id: "net.whatsapp.WhatsApp", name: "WhatsApp", on: true, detail: "2 regions"),
+                      .init(id: "com.tinyspeck.slackmacgap", name: "Slack", on: true, detail: "1 region"),
+                      .init(id: "com.apple.MobileSMS", name: "Messages", on: true, detail: "1 region")]
+        m.lockOn = true
+        m.lockApps = [.init(id: "com.apple.Photos", name: "Photos", on: true, detail: ""),
+                      .init(id: "com.apple.Notes", name: "Notes", on: true, detail: "unlocked"),
+                      .init(id: "com.apple.MobileSMS", name: "Messages", on: true, detail: "")]
+        m.screens = [.init(id: 99, name: "Living Room TV (AirPlay)")]
+        m.presentingTo = nil
+        m.version = UpdateChecker.currentVersion
+        m.keys = [("⌃⌥B", "panic"), ("⌃⌥R", "hold to reveal"), ("⌃⌥M", "masks on/off"), ("⌃⇧⌘L", "lock apps")]
     }
 
     /// Opened by the user (Finder, Launchpad, Dock) → show the window. Not at login, not when

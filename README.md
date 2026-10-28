@@ -1,11 +1,31 @@
-# sharemask
+<p align="center">
+  <img src="docs/icon.png" width="112" alt="sharemask icon">
+</p>
 
-**Privacy for your Mac screen, in two halves.**
+<h1 align="center">sharemask</h1>
 
-- **When you share your screen** in Zoom, Meet, Teams, Slack or FaceTime, the parts you choose (a
-  WhatsApp chat list, a Slack sidebar, notification banners) are pixellated **only for the people
-  watching**. Your own screen stays exactly as it is.
-- **When someone uses your Mac**, the apps you lock stay hidden behind **Touch ID**.
+<p align="center">
+  <b>Privacy for your Mac screen.</b><br>
+  Blur chosen apps only for the people watching your screen share,<br>
+  and keep apps behind Touch ID when someone else uses your Mac.
+</p>
+
+<p align="center">
+  <a href="https://github.com/Larry8668/share-mask/releases/latest"><img src="https://img.shields.io/github/v/release/Larry8668/share-mask?label=release&color=2ea44f" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/macOS-14%2B-black?logo=apple" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/Apple%20Silicon-arm64-555" alt="Apple Silicon">
+  <a href="#install"><img src="https://img.shields.io/badge/brew-install-orange?logo=homebrew&logoColor=white" alt="Install with Homebrew"></a>
+</p>
+
+<p align="center">
+  <img src="docs/hero.png" width="820" alt="The sharemask window: live status, masks, App lock and Present">
+</p>
+
+## Screen sharing, without the leaks
+
+When you share your screen in Zoom, Meet, Teams, Slack or FaceTime, the parts you choose (a
+WhatsApp chat list, a Slack sidebar, notification banners) are pixellated **only for the people
+watching**. Your own screen stays exactly as it is.
 
 ![Your screen stays untouched; the call sees the chat list pixellated](docs/demo.png)
 
@@ -14,7 +34,7 @@
 - **Present in a room** over HDMI or AirPlay with the same masks.
 - Starts by itself when a call begins, and stays out of the way otherwise.
 
-### App lock
+## App lock
 
 ![Opening a locked app shows a Touch ID lock card](docs/applock.png)
 
