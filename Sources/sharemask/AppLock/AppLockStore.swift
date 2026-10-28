@@ -18,7 +18,8 @@ struct AppLockConfig: Codable, Equatable {
 
 enum AppLockStore {
     private static let service = "dev.sharemask.applock"
-    private static let account = "config"
+    /// Tests use a separate Keychain entry so they never touch the user's real App lock settings.
+    private static let account = CommandLine.arguments.contains("--lock-test-store") ? "config-test" : "config"
 
     static func load() -> AppLockConfig {
         let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
@@ -27,6 +28,13 @@ enum AppLockStore {
         guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data,
               let cfg = try? JSONDecoder().decode(AppLockConfig.self, from: data) else { return AppLockConfig() }
         return cfg
+    }
+
+    /// Removes the test entry (tests only).
+    static func deleteTestEntry() {
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                kSecAttrAccount as String: "config-test"]
+        SecItemDelete(q as CFDictionary)
     }
 
     @discardableResult

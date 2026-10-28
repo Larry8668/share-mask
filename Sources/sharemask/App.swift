@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Carbon
 import ServiceManagement
 import ScreenCaptureKit
@@ -117,12 +118,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let locker = AppLocker()
     /// Set after the user authenticated a quit, for shutdown/logout, and for our own relaunch/update.
     private var quitAllowed = false
+    /// Last app in front other than sharemask (menu clicks don't change it for an accessory app, but be safe).
+    private var previousFrontApp: NSRunningApplication? {
+        let f = NSWorkspace.shared.frontmostApplication
+        return f?.bundleIdentifier == Bundle.main.bundleIdentifier ? lastOtherFront : f
+    }
+    private var lastOtherFront: NSRunningApplication?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
         // App lock first: a relaunch after a force-quit must re-hide locked apps immediately.
         locker.onChange = { [weak self] in self?.syncLockState() }
         locker.start()
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
+            if let a = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, a.bundleIdentifier != Bundle.main.bundleIdentifier { self?.lastOtherFront = a }
+        }
+        if CommandLine.arguments.contains("--no-auto-touchid") { locker.card.autoPrompt = false }   // tests
         if handOverToKeepAliveIfNeeded() { return }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { [weak self] _ in
             self?.quitAllowed = true
@@ -300,7 +311,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     handler: { [weak self] in DispatchQueue.main.async { self?.setReveal(true) } },
                     onRelease: { [weak self] in DispatchQueue.main.async { self?.setReveal(false) } })
         hotkeys.set(.allowlist, combo: cfg.hotkeys.allowlist) { [weak self] in DispatchQueue.main.async { self?.toggleAllowlist() } }
-        hotkeys.set(.lockAll, combo: "cmd+shift+ctrl+L") { [weak self] in DispatchQueue.main.async { self?.locker.lockAll(reason: "hotkey") } }
+        hotkeys.set(.lockAll, combo: cfg.hotkeys.lockAll) { [weak self] in DispatchQueue.main.async { Log.info("hotkey: lock all"); self?.locker.lockAll(reason: "hotkey") } }
+        hotkeys.set(.lockApp, combo: cfg.hotkeys.lockApp) { [weak self] in DispatchQueue.main.async { Log.info("hotkey: lock this app"); self?.locker.lockFrontmost() } }
         hotkeys.set(.endShare, combo: cfg.hotkeys.endShare) { [weak self] in DispatchQueue.main.async { self?.endShare(confirm: false) } }
         pointerGuardEnabled = cfg.pointerGuard
         hudEnabled = cfg.hud
@@ -445,7 +457,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func changeHotkey(_ name: String) {
         let hk = config.config.hotkeys
         let current: String? = ["panic": hk.panic, "toggle": hk.toggle, "pick": hk.pick, "reveal": hk.reveal,
-                                "allowlist": hk.allowlist, "endShare": hk.endShare][name] ?? nil
+                                "allowlist": hk.allowlist, "endShare": hk.endShare,
+                                "lockAll": hk.lockAll, "lockApp": hk.lockApp][name] ?? nil
         let title = MenuBar.hotkeyNames.first { $0.0 == name }?.1 ?? name
         recorder.record(actionName: title, current: current) { [weak self] combo in
             guard let self = self, let combo = combo else { return }
@@ -643,6 +656,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         switch c {
         case "lockAll": locker.lockAll(reason: "menu")
+        case "lockApp":
+            // Menu clicks make sharemask frontmost; lock the app that was in front before.
+            if let prev = previousFrontApp, prev.bundleIdentifier != Bundle.main.bundleIdentifier { prev.activate(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self.locker.lockFrontmost() } }
         case "toggle":
             if locker.config.enabled {
                 change { [weak self] in self?.locker.update { $0.enabled = false }; self?.afterKeepAliveSettingChange() }
@@ -891,6 +907,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// App used by App lock tests (Activity Monitor: opens straight to a window and stays in the
+    /// Dock when its window is closed — like WhatsApp).
+    static let testAppID = "com.apple.ActivityMonitor"
+    static let testAppPath = "/System/Applications/Utilities/Activity Monitor.app"
+
     private func scriptAction(_ action: String) {
         guard let p = pipeline else { return }
         Log.info("script: \(action)")
@@ -903,16 +924,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "stop-present": stopPresenting()
         case "lock-setup":       // test: throwaway password, lock TextEdit, App lock on
             setLockPassword("test1234")
-            locker.update { $0.enabled = true; $0.apps = ["com.apple.TextEdit"]; $0.relockMinutes = 0; $0.keepAlive = false }
+            locker.update { $0.enabled = true; $0.apps = [AppDelegate.testAppID]; $0.relockMinutes = 60; $0.keepAlive = false }
         case "lock-setup-keepalive":
             setLockPassword("test1234")
-            locker.update { $0.enabled = true; $0.apps = ["com.apple.TextEdit"]; $0.relockMinutes = 0; $0.keepAlive = true }
+            locker.update { $0.enabled = true; $0.apps = [AppDelegate.testAppID]; $0.relockMinutes = 0; $0.keepAlive = true }
             afterKeepAliveSettingChange()
         case "lock-teardown":
             locker.update { $0 = AppLockConfig() }
             afterKeepAliveSettingChange()
-        case "open-textedit": NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: "/System/Applications/TextEdit.app"), configuration: .init())
+            if CommandLine.arguments.contains("--lock-test-store") { AppLockStore.deleteTestEntry() }
+        case "open-textedit": NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: AppDelegate.testAppPath), configuration: .init())
         case "wrong-password": locker.card.submitForTesting("nope")
+        case "minimize", "close-windows":
+            guard let te = NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first else { break }
+            var v: CFTypeRef?
+            AXUIElementCopyAttributeValue(AXUIElementCreateApplication(te.processIdentifier), kAXWindowsAttribute as CFString, &v)
+            for w in (v as? [AXUIElement]) ?? [] {
+                if action == "minimize" {
+                    AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanTrue)
+                } else {
+                    var btn: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(w, kAXCloseButtonAttribute as CFString, &btn) == .success, let b = btn {
+                        AXUIElementPerformAction(b as! AXUIElement, kAXPressAction as CFString)
+                    }
+                }
+            }
+        case "quit-textedit": NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first?.terminate()
+        case "lock-app":
+            NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first?.activate()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.locker.lockFrontmost() }
         case "password": locker.card.submitForTesting("test1234")
         case "lockall": locker.lockAll(reason: "script")
         case "quit": NSApp.terminate(nil)
@@ -922,7 +962,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             Log.info("script screens: all=\(AppDelegate.realScreens().map { $0.name }) shareable=\(AppDelegate.shareableScreens().map { $0.name }) airplay=\(AppDelegate.airPlayConnected) ignoreWatcher=\(p.output != .proxy || p.recentlyReconfigured || AppDelegate.airPlayConnected)")
-            let te = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.TextEdit").first
+            let te = NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first
+            var wins = -1
+            if let te = te { var v: CFTypeRef?; AXUIElementCopyAttributeValue(AXUIElementCreateApplication(te.processIdentifier), kAXWindowsAttribute as CFString, &v); wins = (v as? [AXUIElement])?.count ?? 0 }
+            Log.info("script textedit windows (AX, incl. minimized): \(wins)")
             Log.info("script lock: active=\(self.locker.isActive) apps=\(self.locker.config.apps) unlocked=\(self.locker.unlockedApps) card=\(self.locker.card.subject ?? "none") textedit=\(te.map { $0.isHidden ? "hidden" : "visible" } ?? "not running") agent=\(KeepAlive.runningUnderAgent)")
             Log.info("script state after \(action): state=\(p.state) output=\(p.output) source=\(p.source.id) proxy=\(p.virtualDisplay.map { "\($0.displayID)" } ?? "none") presenter=\(p.presenter != nil) saved=\(UserDefaults.standard.string(forKey: "sourceScreen") ?? "none")")
         }

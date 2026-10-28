@@ -306,13 +306,15 @@ final class MenuBar: NSObject, NSMenuDelegate {
     }
 
     static let hotkeyNames: [(String, String)] = [("panic", "Panic"), ("toggle", "Toggle regions"), ("pick", "Pick regions"),
-                                                  ("reveal", "Hold to reveal"), ("allowlist", "Allowlist mode"), ("endShare", "End share")]
+                                                  ("reveal", "Hold to reveal"), ("allowlist", "Allowlist mode"), ("endShare", "End share"),
+                                                  ("lockAll", "Lock all apps"), ("lockApp", "Lock this app")]
 
     func updateHotkeys(_ hotkeys: HotkeyConfig) {
         let m = hotkeysItem.submenu!
         m.removeAllItems()
         let values: [String: String?] = ["panic": hotkeys.panic, "toggle": hotkeys.toggle, "pick": hotkeys.pick,
-                                         "reveal": hotkeys.reveal, "allowlist": hotkeys.allowlist, "endShare": hotkeys.endShare]
+                                         "reveal": hotkeys.reveal, "allowlist": hotkeys.allowlist, "endShare": hotkeys.endShare,
+                                         "lockAll": hotkeys.lockAll, "lockApp": hotkeys.lockApp]
         for (key, title) in MenuBar.hotkeyNames {
             let combo = values[key] ?? nil
             let shown = (combo?.isEmpty ?? true) ? "unbound" : Hotkeys.pretty(combo)
@@ -472,6 +474,9 @@ final class MenuBar: NSObject, NSMenuDelegate {
         let lockNow = cmd("Lock all now", "lockAll", enabled: m.enabled && m.apps.contains { $0.unlockedNow })
         lockNow.keyEquivalent = "l"; lockNow.keyEquivalentModifierMask = [.command, .shift, .control]
         menu.addItem(lockNow)
+        let lockThis = cmd("Lock the current app", "lockApp", enabled: true)
+        lockThis.keyEquivalent = "l"; lockThis.keyEquivalentModifierMask = [.command, .control]
+        menu.addItem(lockThis)
         menu.addItem(cmd(m.enabled ? "Turn App lock off…" : "Turn App lock on", "toggle"))
         menu.addItem(.separator())
         let h = NSMenuItem(title: "Apps to lock", action: nil, keyEquivalent: ""); h.isEnabled = false
