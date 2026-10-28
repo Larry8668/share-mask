@@ -28,9 +28,21 @@ enum Main {
         for sig in [SIGTERM, SIGINT] {
             signal(sig, SIG_IGN)
             let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-            src.setEventHandler { Log.info("signal \(sig): quitting cleanly"); NSApp.terminate(nil) }
+            src.setEventHandler { Log.info("signal \(sig)"); AppDelegate.shared?.handleTerminationSignal() ?? NSApp.terminate(nil) }
             src.resume()
             Main.signalSources.append(src)
+        }
+        // One sharemask at a time (the keep-alive agent and a manual launch could otherwise overlap).
+        // Wait briefly for a quitting instance (relaunch / agent handover) before giving up.
+        let me = getpid()
+        func others() -> [NSRunningApplication] {
+            NSRunningApplication.runningApplications(withBundleIdentifier: "dev.sharemask.app").filter { $0.processIdentifier != me && !$0.isTerminated }
+        }
+        var waited = 0.0
+        while !others().isEmpty && waited < 3 { Thread.sleep(forTimeInterval: 0.2); waited += 0.2 }
+        if let other = others().first {
+            Log.info("another sharemask (pid \(other.processIdentifier)) is running; exiting")
+            exit(0)
         }
         let app = NSApplication.shared
         let delegate = AppDelegate(launch: launch, demo: args.contains("--demo"))
@@ -84,7 +96,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var shownKeysThisLaunch = false
     private var knownExternals: Set<String> = []
     private let alerts = PromptPanel()
-    private var options = ResolveOptions() { didSet { pipeline?.options = options; refreshMenu(); updateHUD() } }
+    private var options = ResolveOptions() { didSet { pipeline?.options = effectiveOptions; refreshMenu(); updateHUD() } }
+    /// Session options plus App lock's apps masked whole-window in shares.
+    private var effectiveOptions: ResolveOptions {
+        var o = options
+        if locker.isActive { o.forceMasked = Set(locker.config.apps) }
+        return o
+    }
     private var refreshTimer: Timer?
     private var permissionMissing = false
     private var pointerGuardEnabled = true
@@ -95,7 +113,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.demo = demo
     }
 
+    static weak var shared: AppDelegate?
+    let locker = AppLocker()
+    /// Set after the user authenticated a quit, for shutdown/logout, and for our own relaunch/update.
+    private var quitAllowed = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppDelegate.shared = self
+        // App lock first: a relaunch after a force-quit must re-hide locked apps immediately.
+        locker.onChange = { [weak self] in self?.syncLockState() }
+        locker.start()
+        if handOverToKeepAliveIfNeeded() { return }
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.quitAllowed = true
+            Log.info("logout/shutdown: quit allowed")
+        }
         menuBar = MenuBar(actions: .init(
             toggleProxy: { [weak self] in self?.toggleProxy() },
             panic: { [weak self] in self?.togglePanic() },
@@ -123,11 +155,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             relaunch: { [weak self] in self?.relaunch() },
             bringBackStrays: { [weak self] in self?.bringBackStrays() },
             chooseScreen: { [weak self] id in self?.chooseScreen(id) },
+            appLock: { [weak self] c, arg in self?.appLockCommand(c, arg) },
             present: { [weak self] tv, mirror in self?.present(tv: tv, mirror: mirror) },
             stopPresenting: { [weak self] in self?.stopPresenting() },
             showKeys: { [weak self] in self?.keysPanel.show(on: self?.launch.source.id ?? CGMainDisplayID()) },
             checkUpdates: { [weak self] in self?.updates.check(manual: true) },
-            updateNow: { [weak self] in self?.updates.updateNow() },
+            updateNow: { [weak self] in
+                guard let self = self else { return }
+                self.locker.authorize("settings", title: "Update sharemask", detail: "sharemask will quit and relaunch.") {
+                    self.quitAllowed = true
+                    self.updates.updateNow()
+                }
+            },
             copyUpdateCommand: { [weak self] in self?.updates.copyCommand() },
             openReleasePage: { [weak self] in self?.updates.openReleasePage() },
             toggleUpdateChecks: { [weak self] in self?.updates.enabled.toggle(); self?.refreshMenu() },
@@ -149,6 +188,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let p = Pipeline(source: savedSource() ?? launch.source, tracker: tracker)
         p.config = config.config
+        p.options = effectiveOptions
         p.captureMode = Pipeline.CaptureMode(rawValue: config.config.captureMode) ?? .ask
         let mc = MeetingCoordinator(pipeline: p, prompt: alerts)
         mc.ignoreWatcher = { [weak p] in
@@ -205,6 +245,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Quit guard: ⌘Q / menu Quit / AppleScript quit need authentication while App lock is on.
+    /// Shutdown, restart and logout are never blocked.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard locker.isActive, locker.config.guardQuit, !quitAllowed else { return .terminateNow }
+        Log.info("quit requested while App lock is on: asking for authentication")
+        // Cancel now and quit again after authenticating. (.terminateLater runs the main thread in a
+        // modal mode where queued work, timers and notifications stall — including App lock's own
+        // enforcement and the Touch ID callback.)
+        locker.card.show(subject: "quit", title: "Quit sharemask?", detail: "Locked apps stay unprotected until sharemask runs again.",
+                         icon: NSImage(named: NSImage.applicationIconName)) { [weak self] ok in
+            guard ok else { return }
+            self?.quitAllowed = true
+            NSApp.terminate(nil)
+        }
+        return .terminateCancel
+    }
+
+    /// SIGTERM/SIGINT. With App lock + keep-alive on, exit non-zero after cleanup so the agent
+    /// relaunches sharemask (a `pkill` must not be a way around the lock); otherwise a normal quit.
+    func handleTerminationSignal() {
+        if locker.isActive && locker.config.keepAlive && KeepAlive.runningUnderAgent && !quitAllowed {
+            Log.warn("terminated by signal while App lock is on: cleaning up; the keep-alive agent will relaunch")
+            meetings?.stop()
+            pipeline?.stop()
+            exit(75)
+        }
+        if locker.isActive && locker.config.guardQuit && !quitAllowed {
+            NSApp.terminate(nil)   // goes through the quit guard
+        } else {
+            quitAllowed = true
+            NSApp.terminate(nil)
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         meetings?.stop()
         hotkeys.unregisterAll()
@@ -226,6 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     handler: { [weak self] in DispatchQueue.main.async { self?.setReveal(true) } },
                     onRelease: { [weak self] in DispatchQueue.main.async { self?.setReveal(false) } })
         hotkeys.set(.allowlist, combo: cfg.hotkeys.allowlist) { [weak self] in DispatchQueue.main.async { self?.toggleAllowlist() } }
+        hotkeys.set(.lockAll, combo: "cmd+shift+ctrl+L") { [weak self] in DispatchQueue.main.async { self?.locker.lockAll(reason: "hotkey") } }
         hotkeys.set(.endShare, combo: cfg.hotkeys.endShare) { [weak self] in DispatchQueue.main.async { self?.endShare(confirm: false) } }
         pointerGuardEnabled = cfg.pointerGuard
         hudEnabled = cfg.hud
@@ -493,6 +568,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if p.state.isRunning, let m = meetings { latency += "\n" + m.statusText }
         }
 
+        menuBar.updateAppLock(appLockModel())
         menuBar.updatePresent(AppDelegate.externalScreens(), active: pipeline?.output ?? .proxy)
         menuBar.updateScreens(AppDelegate.shareableScreens(), selected: pipeline?.source.id ?? CGMainDisplayID())
         menuBar.updateVersion(current: UpdateChecker.currentVersion, status: updates.status,
@@ -507,6 +583,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Quit and start a fresh instance (needed after Screen Recording is granted to a running app).
     private func relaunch() {
+        quitAllowed = true
         let url = Bundle.main.bundleURL
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
@@ -516,6 +593,126 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func vdSafe(_ p: Pipeline) -> Bool { p.virtualDisplay?.isSafeToPresent ?? true }
+
+    // MARK: App lock
+
+    private func syncLockState() {
+        pipeline?.options = effectiveOptions
+        refreshMenu()
+    }
+
+    /// If App lock wants the keep-alive agent and this instance wasn't started by it, start the
+    /// agent's instance and exit (the new one waits for us to go). Returns true when exiting.
+    private func handOverToKeepAliveIfNeeded() -> Bool {
+        let want = locker.isActive && locker.config.keepAlive && !CommandLine.arguments.contains("--no-handover")   // dev/test only
+        let exe = Bundle.main.executablePath
+        if want && !KeepAlive.runningUnderAgent {
+            if KeepAlive.installedExecutable != exe || !KeepAlive.isLoaded { KeepAlive.install() } else { KeepAlive.kickstart() }
+            Log.info("handing over to the keep-alive agent")
+            quitAllowed = true
+            DispatchQueue.main.async { exit(0) }
+            return true
+        }
+        if !want && FileManager.default.fileExists(atPath: KeepAlive.plistURL.path) {
+            KeepAlive.uninstall(reopen: KeepAlive.runningUnderAgent)
+            if KeepAlive.runningUnderAgent { quitAllowed = true; DispatchQueue.main.async { exit(0) }; return true }
+        }
+        return false
+    }
+
+    private func appLockModel() -> MenuBar.AppLockModel {
+        let c = locker.config
+        let running = NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular && $0.bundleIdentifier != nil && !AppLocker.unlockable.contains($0.bundleIdentifier!) }
+        var ids = c.apps
+        for r in running where !ids.contains(r.bundleIdentifier!) { ids.append(r.bundleIdentifier!) }
+        let unlockedNow = Set(locker.unlockedApps)
+        let apps = ids.map { b -> (bundleID: String, name: String, locked: Bool, unlockedNow: Bool) in
+            let name = running.first { $0.bundleIdentifier == b }?.localizedName
+                ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: b).flatMap { Bundle(url: $0)?.infoDictionary?["CFBundleName"] as? String } ?? b
+            return (b, name, c.apps.contains(b), unlockedNow.contains(b))
+        }.sorted { ($0.locked ? 0 : 1, $0.name.lowercased()) < ($1.locked ? 0 : 1, $1.name.lowercased()) }
+        return .init(enabled: c.enabled, apps: apps, relockMinutes: c.relockMinutes, relockOnSleep: c.relockOnSleep,
+                     guardQuit: c.guardQuit, keepAlive: c.keepAlive, hasPassword: c.passwordHash != nil)
+    }
+
+    /// Every change except turning App lock ON and "lock all" needs authentication while active.
+    private func appLockCommand(_ c: String, _ arg: String?) {
+        let change: (@escaping () -> Void) -> Void = { [weak self] action in
+            self?.locker.authorize("settings", title: "Change App lock settings", detail: "Confirm it's you.", then: action)
+        }
+        switch c {
+        case "lockAll": locker.lockAll(reason: "menu")
+        case "toggle":
+            if locker.config.enabled {
+                change { [weak self] in self?.locker.update { $0.enabled = false }; self?.afterKeepAliveSettingChange() }
+            } else {
+                locker.update { $0.enabled = true }
+                if locker.config.apps.isEmpty {
+                    alerts.show(title: "App lock is on", detail: "Tick the apps to lock under App lock ▸ Apps to lock.",
+                                primary: "OK", secondary: "Later", timeout: 8, onPrimary: {}, onSecondary: {})
+                }
+                afterKeepAliveSettingChange()
+            }
+        case "app":
+            guard let b = arg else { return }
+            if locker.config.apps.contains(b) {
+                change { [weak self] in self?.locker.update { $0.apps.removeAll { $0 == b } } }
+            } else {
+                // Adding a lock never needs auth (it only makes things stricter).
+                locker.update { $0.apps.append(b); if !$0.enabled { $0.enabled = true } }
+                afterKeepAliveSettingChange()
+            }
+        case "relock":
+            let m = Int(arg ?? "5") ?? 5
+            if m < locker.config.relockMinutes || !locker.isActive { locker.update { $0.relockMinutes = m } }
+            else { change { [weak self] in self?.locker.update { $0.relockMinutes = m } } }
+        case "sleep":
+            if !locker.config.relockOnSleep { locker.update { $0.relockOnSleep = true } }
+            else { change { [weak self] in self?.locker.update { $0.relockOnSleep = false } } }
+        case "guardQuit":
+            if !locker.config.guardQuit { locker.update { $0.guardQuit = true } }
+            else { change { [weak self] in self?.locker.update { $0.guardQuit = false } } }
+        case "keepAlive":
+            if !locker.config.keepAlive { locker.update { $0.keepAlive = true }; afterKeepAliveSettingChange() }
+            else { change { [weak self] in self?.locker.update { $0.keepAlive = false }; self?.afterKeepAliveSettingChange() } }
+        case "password": change { [weak self] in self?.askNewPassword() }
+        case "removePassword": change { [weak self] in self?.locker.update { $0.passwordHash = nil } }
+        default: break
+        }
+    }
+
+    private func afterKeepAliveSettingChange() {
+        let want = locker.isActive && locker.config.keepAlive
+        let installed = FileManager.default.fileExists(atPath: KeepAlive.plistURL.path)
+        guard want != installed || (want && !KeepAlive.runningUnderAgent) else { return }
+        quitAllowed = true
+        _ = handOverToKeepAliveIfNeeded()
+        quitAllowed = false
+    }
+
+    private func askNewPassword() {
+        let a = NSAlert()
+        a.messageText = "Set a sharemask password"
+        a.informativeText = "Used on lock cards instead of Touch ID (your Mac login password keeps working too). At least 4 characters."
+        let f1 = NSSecureTextField(frame: NSRect(x: 0, y: 30, width: 240, height: 24)); f1.placeholderString = "New password"
+        let f2 = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24)); f2.placeholderString = "Repeat"
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 54)); box.addSubview(f1); box.addSubview(f2)
+        a.accessoryView = box
+        a.addButton(withTitle: "Set"); a.addButton(withTitle: "Cancel")
+        a.window.initialFirstResponder = f1
+        NSApp.activate(ignoringOtherApps: true)
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        guard f1.stringValue.count >= 4, f1.stringValue == f2.stringValue else {
+            alert("Password not set", "The two entries must match and be at least 4 characters.")
+            return
+        }
+        setLockPassword(f1.stringValue)
+    }
+
+    private func setLockPassword(_ pw: String) {
+        locker.update { $0.passwordHash = AppLockStore.hash(pw) }
+    }
 
     // MARK: Which screen to share
 
@@ -681,7 +878,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in self?.snapshotOutputScreen(to: dir) }
         }
         // --script "3:start,8:end,12:start,16:end" — timed actions for reproducing bug reports.
-        if let script = value("--script") {
+        if let script = value("--script") ?? ProcessInfo.processInfo.environment["SHAREMASK_TEST_SCRIPT"] {
             for step in script.split(separator: ",") {
                 let parts = step.split(separator: ":")
                 guard parts.count == 2, let t = Double(parts[0]) else { continue }
@@ -704,12 +901,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "present-extend", "present-mirror":
             if let tv = AppDelegate.externalScreens().first { present(tv: tv.id, mirror: action == "present-mirror") }
         case "stop-present": stopPresenting()
+        case "lock-setup":       // test: throwaway password, lock TextEdit, App lock on
+            setLockPassword("test1234")
+            locker.update { $0.enabled = true; $0.apps = ["com.apple.TextEdit"]; $0.relockMinutes = 0; $0.keepAlive = false }
+        case "lock-setup-keepalive":
+            setLockPassword("test1234")
+            locker.update { $0.enabled = true; $0.apps = ["com.apple.TextEdit"]; $0.relockMinutes = 0; $0.keepAlive = true }
+            afterKeepAliveSettingChange()
+        case "lock-teardown":
+            locker.update { $0 = AppLockConfig() }
+            afterKeepAliveSettingChange()
+        case "open-textedit": NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: "/System/Applications/TextEdit.app"), configuration: .init())
+        case "wrong-password": locker.card.submitForTesting("nope")
+        case "password": locker.card.submitForTesting("test1234")
+        case "lockall": locker.lockAll(reason: "script")
+        case "quit": NSApp.terminate(nil)
         case "source-tv":
             if let tv = AppDelegate.realScreens().first(where: { CGDisplayIsBuiltin($0.id) == 0 }) { chooseScreen(tv.id) }
         default: break
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             Log.info("script screens: all=\(AppDelegate.realScreens().map { $0.name }) shareable=\(AppDelegate.shareableScreens().map { $0.name }) airplay=\(AppDelegate.airPlayConnected) ignoreWatcher=\(p.output != .proxy || p.recentlyReconfigured || AppDelegate.airPlayConnected)")
+            let te = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.TextEdit").first
+            Log.info("script lock: active=\(self.locker.isActive) apps=\(self.locker.config.apps) unlocked=\(self.locker.unlockedApps) card=\(self.locker.card.subject ?? "none") textedit=\(te.map { $0.isHidden ? "hidden" : "visible" } ?? "not running") agent=\(KeepAlive.runningUnderAgent)")
             Log.info("script state after \(action): state=\(p.state) output=\(p.output) source=\(p.source.id) proxy=\(p.virtualDisplay.map { "\($0.displayID)" } ?? "none") presenter=\(p.presenter != nil) saved=\(UserDefaults.standard.string(forKey: "sourceScreen") ?? "none")")
         }
     }

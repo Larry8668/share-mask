@@ -9,8 +9,8 @@
 # updates) but is not notarised, so Gatekeeper would refuse the quarantined download. The
 # postflight below removes the quarantine attribute (Homebrew 7 dropped --no-quarantine).
 cask "sharemask" do
-  version "0.1.8"
-  sha256 "2f59474b76b01a84fa79d378a46c6ecb86b29c5cea85b31b80c9549345b786bd"
+  version "0.1.9"
+  sha256 "d12070c02a9a43900b2a744334714e28ffafb4346841cc366d2b85b7194dd4dc"
 
   url "https://github.com/Larry8668/share-mask/releases/download/v#{version}/sharemask-#{version}.zip"
   name "sharemask"
@@ -31,6 +31,9 @@ cask "sharemask" do
     still refuses, right-click the app and choose Open once. On first launch grant Screen Recording
     in System Settings → Privacy & Security → Screen & System Audio Recording.
   EOS
+
+  uninstall launchctl: "dev.sharemask.keepalive",
+            delete:    "~/Library/LaunchAgents/dev.sharemask.keepalive.plist"
 
   zap trash: [
     "~/.config/sharemask",
