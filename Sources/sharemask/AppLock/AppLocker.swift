@@ -84,7 +84,7 @@ final class AppLocker {
         config = c
         AppLockStore.save(c)
         reschedule()
-        Log.info("app lock config: enabled=\(c.enabled) apps=\(c.apps) relock=\(c.relockMinutes)m sleep=\(c.relockOnSleep) quit=\(c.guardQuit) keepAlive=\(c.keepAlive) password=\(c.passwordHash != nil)")
+        Log.info("app lock config: enabled=\(c.enabled) apps=\(c.apps) relock=\(c.relockMinutes)m sleep=\(c.relockOnSleep) quit=\(c.guardQuit) keepAlive=\(c.keepAlive) password=\(c.passwordHash != nil) perApp=\((c.appSettings ?? [:]).mapValues { "close=\($0.closeRelockSeconds.map(String.init) ?? "-") bg=\($0.relockMinutes.map(String.init) ?? "-") hide=\($0.hideNotifications.map { "\($0)" } ?? "-")" })")
         enforce()
         onChange?()
     }
@@ -131,8 +131,9 @@ final class AppLocker {
     private var axObservers: [String: AXObserver] = [:]
 
     private func shouldRelockOnReopen(_ b: String, closedSince: Date) -> Bool {
-        guard unlocked[b] != nil, hadWindow.contains(b), !inGrace(b), config.closeDelay >= 0 else { return false }
-        return config.closeDelay == 0 || Date().timeIntervalSince(closedSince) >= Double(config.closeDelay)
+        let delay = config.closeDelay(for: b)
+        guard unlocked[b] != nil, hadWindow.contains(b), !inGrace(b), delay >= 0 else { return false }
+        return delay == 0 || Date().timeIntervalSince(closedSince) >= Double(delay)
     }
 
     private func relockReopened(_ app: NSRunningApplication, _ b: String, via: String) {
@@ -223,9 +224,9 @@ final class AppLocker {
             // Reopened after its window was closed: clicking the Dock icon activates the app BEFORE it
             // draws a new window, so "activated with no windows" means closed-then-reopened. Lock now,
             // however quickly it was reopened.
-            if activated, hadWindow.contains(b), !inGrace(b), config.closeDelay >= 0, windowCount(app) == 0 {
+            if activated, hadWindow.contains(b), !inGrace(b), config.closeDelay(for: b) >= 0, windowCount(app) == 0 {
                 let closedFor = zeroSince[b].map { Date().timeIntervalSince($0) } ?? 0
-                if config.closeDelay == 0 || closedFor >= Double(config.closeDelay) {
+                if config.closeDelay(for: b) == 0 || closedFor >= Double(config.closeDelay(for: b)) {
                     relock(b, reason: "reopened after its window was closed")
                     hide(app)
                     promptUnlock(app)
@@ -292,18 +293,19 @@ final class AppLocker {
                     }
                     hadWindow.insert(b); zeroSince[b] = nil
                 }
-                else if hadWindow.contains(b) && !app.isHidden && !inGrace(b) && config.closeDelay >= 0 {
+                else if hadWindow.contains(b) && !app.isHidden && !inGrace(b) && config.closeDelay(for: b) >= 0 {
                     let since = zeroSince[b] ?? Date()
                     zeroSince[b] = since
-                    if Date().timeIntervalSince(since) >= max(AppLocker.closedDebounce, Double(config.closeDelay)) {
+                    if Date().timeIntervalSince(since) >= max(AppLocker.closedDebounce, Double(config.closeDelay(for: b))) {
                         relock(b, reason: "all windows closed")
                         continue
                     }
                 }
             }
             if b == front { unlocked[b] = Date(); continue }
-            if Date().timeIntervalSince(last) >= Double(config.relockMinutes) * 60 {
-                relock(b, reason: config.relockMinutes == 0 ? "switched away" : "\(config.relockMinutes) min in background")
+            let mins = config.relockMinutes(for: b)
+            if Date().timeIntervalSince(last) >= Double(mins) * 60 {
+                relock(b, reason: mins == 0 ? "switched away" : "\(mins) min in background")
             }
         }
         for app in NSWorkspace.shared.runningApplications {
@@ -322,7 +324,7 @@ final class AppLocker {
     func promptUnlock(_ app: NSRunningApplication, detail: String? = nil, then: (() -> Void)? = nil) {
         guard let b = app.bundleIdentifier else { return }
         let name = app.localizedName ?? b
-        card.show(subject: b, title: "\(name) is locked", detail: detail ?? "Unlock to use it. It relocks \(relockText).",
+        card.show(subject: b, title: "\(name) is locked", detail: detail ?? "Unlock to use it. It relocks \(relockText(for: b)).",
                   icon: app.icon) { [weak self] ok in
             guard ok, let self = self else { return }
             self.unlocked[b] = Date()
@@ -341,8 +343,9 @@ final class AppLocker {
     /// Accessibility window count (incl. minimized), for callers that need to wait for a window.
     func windowCountFor(_ app: NSRunningApplication) -> Int { windowCount(app) ?? 0 }
 
-    var relockText: String {
-        config.relockMinutes == 0 ? "as soon as you switch away" : "after \(config.relockMinutes) min in the background"
+    func relockText(for b: String) -> String {
+        let m = config.relockMinutes(for: b)
+        return m == 0 ? "as soon as you switch away" : "after \(m) min in the background"
     }
 
     var unlockedApps: [String] { Array(unlocked.keys) }

@@ -111,7 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// previews are hidden; otherwise the watcher doesn't run at all.
     private func updateNotificationWatcherNeed() {
         let capturing = pipeline.map { $0.state == .running || $0.state == .starting } ?? false
-        let covering = locker.isActive && locker.config.hidesNotifications
+        let covering = locker.isActive && locker.config.anyHidesNotifications
         notifications.needed = capturing || covering
     }
     private var isNewUser = false
@@ -757,6 +757,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         a.setCloseDelay = { [weak self] v in self?.appLockCommand("closeRelock", "\(v)") }
         a.lockNow = { [weak self] b in self?.locker.lockNow(b) }
         a.toggleHideNotifications = { [weak self] in self?.appLockCommand("hideNotifs", nil) }
+        a.setAppLockSetting = { [weak self] b, key, v in self?.appLockCommand("appSetting", "\(b)|\(key)|\(v)") }
+        a.stopLocking = { [weak self] b in self?.appLockCommand("app", b) }
         a.chooseAppToLock = { [weak self] in
             let panel = NSOpenPanel()
             panel.title = "Choose an app to lock"
@@ -822,7 +824,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if m.lockOn != lm.enabled { m.lockOn = lm.enabled }
         if m.lockCloseDelay != locker.config.closeDelay { m.lockCloseDelay = locker.config.closeDelay }
         if m.lockHidesNotifications != locker.config.hidesNotifications { m.lockHidesNotifications = locker.config.hidesNotifications }
-        let locks = lm.apps.map { AppModel.AppItem(id: $0.bundleID, name: $0.name, on: $0.locked, detail: $0.unlockedNow ? "unlocked" : "") }
+        let cfg = locker.config
+        let locks = lm.apps.map { a -> AppModel.AppItem in
+            var item = AppModel.AppItem(id: a.bundleID, name: a.name, on: a.locked, detail: a.unlockedNow ? "unlocked" : "")
+            item.closeDelay = cfg.closeDelay(for: a.bundleID)
+            item.relockMinutes = cfg.relockMinutes(for: a.bundleID)
+            item.hidesNotifications = cfg.hidesNotifications(for: a.bundleID)
+            return item
+        }
         if m.lockApps != locks { m.lockApps = locks }
         let screens = AppDelegate.externalScreens().map { AppModel.Screen(id: $0.id, name: $0.name) }
         if m.screens != screens { m.screens = screens }
@@ -894,9 +903,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Which banners to cover on the user's own screen: those of apps that are locked right now,
     /// matched by the app name Notification Center shows. Off unless App lock ▸ Hide notification previews.
     private func syncNotificationCovers() {
-        guard locker.isActive, locker.config.hidesNotifications else { notifications.coverApps = [:]; return }
+        guard locker.isActive, locker.config.anyHidesNotifications else { notifications.coverApps = [:]; return }
         var map: [String: String] = [:]
-        for b in locker.config.apps where locker.isLocked(b) {
+        for b in locker.config.apps where locker.isLocked(b) && locker.config.hidesNotifications(for: b) {
             let running = NSRunningApplication.runningApplications(withBundleIdentifier: b).first?.localizedName
             let bundleName = NSWorkspace.shared.urlForApplication(withBundleIdentifier: b).flatMap { Bundle(url: $0) }
             for n in [running, bundleName?.infoDictionary?["CFBundleDisplayName"] as? String, bundleName?.infoDictionary?["CFBundleName"] as? String].compactMap({ $0 }) {
@@ -970,7 +979,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "app":
             guard let b = arg else { return }
             if locker.config.apps.contains(b) {
-                change { [weak self] in self?.locker.update { $0.apps.removeAll { $0 == b } } }
+                change { [weak self] in self?.locker.update { $0.apps.removeAll { $0 == b }; $0.appSettings?[b] = nil } }
             } else {
                 // Adding a lock never needs auth (it only makes things stricter).
                 locker.update { $0.apps.append(b); if !$0.enabled { $0.enabled = true } }
@@ -980,6 +989,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let m = Int(arg ?? "5") ?? 5
             if m < locker.config.relockMinutes || !locker.isActive { locker.update { $0.relockMinutes = m } }
             else { change { [weak self] in self?.locker.update { $0.relockMinutes = m } } }
+        case "appSetting":
+            // "bundle|key|value". Making it stricter never asks; loosening asks for Touch ID.
+            let parts = (arg ?? "").split(separator: "|").map(String.init)
+            guard parts.count == 3, let v = Int(parts[2]) else { return }
+            let b = parts[0], key = parts[1]
+            let c = locker.config
+            func rank(_ x: Int) -> Int { x < 0 ? Int.max : x }   // never = loosest
+            let stricter: Bool
+            switch key {
+            case "close": stricter = rank(v) <= rank(c.closeDelay(for: b))
+            case "background": stricter = v <= c.relockMinutes(for: b)
+            case "notifications": stricter = (v != 0) || !c.hidesNotifications(for: b)
+            default: return
+            }
+            let apply = { [weak self] in
+                self?.locker.update { cfg in
+                    cfg.setAppSettings(b) { a in
+                        switch key {
+                        case "close": a.closeRelockSeconds = v
+                        case "background": a.relockMinutes = v
+                        default: a.hideNotifications = v != 0
+                        }
+                    }
+                }
+                Log.info("app lock: \(b) \(key) → \(v)")
+            }
+            if stricter || !locker.isActive { apply() } else { change(apply) }
         case "hideNotifs":
             if !locker.config.hidesNotifications { locker.update { $0.hideNotifications = true } }
             else { change { [weak self] in self?.locker.update { $0.hideNotifications = false } } }
@@ -1337,6 +1373,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                         AXUIElementSetAttributeValue(w, "AXFullScreen" as CFString, kCFBooleanFalse)
                         Log.info("script: test app out of full screen")
+                    }
+                }
+            }
+        case "app-close-30": appLockCommand("appSetting", "\(AppDelegate.testAppID)|close|30")
+        case "app-close-0": appLockCommand("appSetting", "\(AppDelegate.testAppID)|close|0")
+        case "app-hide-notifs": appLockCommand("appSetting", "\(AppDelegate.testAppID)|notifications|1")
+        case "open-lock-settings": mainWindow.show(); updateModel(); model.openLockApp = AppDelegate.testAppID
+        case "snap-main-area":   // screenshot of the main window plus the popover beside it
+            if let n = mainWindow.windowNumber, let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(n)) as? [[String: Any]])?.first,
+               let b = (info[kCGWindowBounds as String] as? NSDictionary).flatMap({ CGRect(dictionaryRepresentation: $0 as CFDictionary) }) {
+                let path = (ProcessInfo.processInfo.environment["SHAREMASK_SNAP_DIR"] ?? NSTemporaryDirectory()) + "/lock-settings.png"
+                if #available(macOS 15.2, *) {
+                    SCScreenshotManager.captureImage(in: CGRect(x: b.minX + b.width * 0.35, y: b.minY + 60, width: b.width * 0.65 + 400, height: b.height - 40)) { img, _ in
+                        guard let img = img else { return }
+                        try? NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                        Log.info("snap-main-area written")
                     }
                 }
             }

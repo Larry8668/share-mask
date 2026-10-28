@@ -10,7 +10,7 @@
 # postflight below removes the quarantine attribute (Homebrew 7 dropped --no-quarantine).
 cask "sharemask" do
   version "0.2.7"
-  sha256 "3e5a944938df16532690e0c914a048ff2d5931e119e879b360b4f49b1c55ef17"
+  sha256 "2107758b04c9aa71cf806acaad374d0fe99d4adba31d7a46374303a6225adbf8"
 
   url "https://github.com/Larry8668/share-mask/releases/download/v#{version}/sharemask-#{version}.zip"
   name "sharemask"

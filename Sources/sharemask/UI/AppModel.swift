@@ -11,7 +11,10 @@ final class AppModel: ObservableObject {
         var name: String
         var on: Bool              // mask enabled / app locked
         var detail: String        // "3 regions", "unlocked"
-        static func == (a: AppItem, b: AppItem) -> Bool { a.id == b.id && a.name == b.name && a.on == b.on && a.detail == b.detail }
+        // App lock per-app settings (unused for masks)
+        var closeDelay = 0        // seconds; 0 instantly, -1 never
+        var relockMinutes = 5     // in the background; 0 = as soon as you switch away
+        var hidesNotifications = false
     }
     struct Screen: Identifiable, Equatable { var id: UInt32; var name: String }
 
@@ -24,6 +27,8 @@ final class AppModel: ObservableObject {
     @Published var lockOn = false
     @Published var lockCloseDelay = 0      // seconds; 0 instantly, -1 never
     @Published var lockHidesNotifications = false
+    /// App whose App lock settings popover is open.
+    @Published var openLockApp: String?
     @Published var lockApps: [AppItem] = []
     @Published var screens: [Screen] = []
     @Published var presentingTo: UInt32?
@@ -46,6 +51,9 @@ final class AppModel: ObservableObject {
         var setCloseDelay: (Int) -> Void = { _ in }
         var lockNow: (String) -> Void = { _ in }
         var toggleHideNotifications: () -> Void = {}
+        /// (bundle ID, setting, value): "close" seconds, "background" minutes, "notifications" 0/1
+        var setAppLockSetting: (String, String, Int) -> Void = { _, _, _ in }
+        var stopLocking: (String) -> Void = { _ in }
         var chooseAppToLock: () -> Void = {}
         var present: (UInt32, Bool) -> Void = { _, _ in }
         var stopPresenting: () -> Void = {}
@@ -58,6 +66,12 @@ final class AppModel: ObservableObject {
     }
     var actions = Actions()
     static let closeDelayChoices: [(Int, String)] = [(0, "Instantly"), (30, "After 30 s"), (60, "After 1 min"), (300, "After 5 min"), (-1, "Never")]
+    static let backgroundChoices: [(Int, String)] = [(0, "When you switch away"), (1, "After 1 min"), (5, "After 5 min"), (15, "After 15 min"), (60, "After 1 hour")]
+
+    static func closeText(_ v: Int) -> String {
+        switch v { case 0: return "on close"; case -1: return "not on close"; default: return v < 60 ? "\(v) s after close" : "\(v / 60) min after close" }
+    }
+    static func backgroundText(_ v: Int) -> String { v == 0 ? "when you switch away" : (v >= 60 ? "\(v / 60) h in background" : "\(v) min in background") }
 
     static func icon(_ bundleID: String) -> NSImage {
         if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {

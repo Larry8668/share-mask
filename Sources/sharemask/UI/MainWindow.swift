@@ -196,7 +196,7 @@ struct MainView: View {
         }
     }
 
-    // App lock — one row per app with a clear lock switch (clicking icons used to remove the lock).
+    // App lock — click an app for its own settings (when it relocks, notification previews, remove).
     private var lockCard: some View {
         Card(title: "App lock", symbol: "lock.fill", tint: .green,
              trailing: AnyView(Toggle("", isOn: Binding(get: { model.lockOn }, set: { _ in model.actions.toggleLock() }))
@@ -206,33 +206,13 @@ struct MainView: View {
                 emptyState("Nothing locked", "Add an app to hide it behind Touch ID.", "lock.open")
             } else {
                 ScrollView {
-                    VStack(spacing: 6) {
+                    VStack(spacing: 4) {
                         ForEach(locked) { app in
-                            let open = app.detail == "unlocked"
-                            HStack(spacing: 8) {
-                                ZStack(alignment: .bottomTrailing) {
-                                    AppIcon(bundleID: app.id, size: 24)
-                                    Image(systemName: open ? "lock.open.fill" : "lock.fill")
-                                        .font(.system(size: 7, weight: .bold)).foregroundStyle(.white)
-                                        .padding(2.5).background(Circle().fill(open ? Color.orange : Color.green))
-                                        .offset(x: 3, y: 3)
+                            lockRow(app)
+                                .popover(isPresented: Binding(get: { model.openLockApp == app.id }, set: { if !$0 { model.openLockApp = nil } }),
+                                         arrowEdge: .trailing) {
+                                    LockAppSettings(app: app, model: model) { model.openLockApp = nil }
                                 }
-                                VStack(alignment: .leading, spacing: 0) {
-                                    Text(app.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                                    Text(open ? "Unlocked now" : "Locked")
-                                        .font(.system(size: 10)).foregroundStyle(open ? .orange : .secondary)
-                                }
-                                Spacer()
-                                if open {
-                                    Button("Lock now") { model.actions.lockNow(app.id) }
-                                        .controlSize(.mini).buttonStyle(.bordered)
-                                }
-                                Toggle("", isOn: Binding(get: { true }, set: { _ in model.actions.toggleLockApp(app.id) }))
-                                    .toggleStyle(.switch).controlSize(.mini).labelsHidden()
-                                    .help("Turn off to stop locking \(app.name) (asks for Touch ID)")
-                            }
-                            .opacity(model.lockOn ? 1 : 0.45)
-                            .transition(.move(edge: .top).combined(with: .opacity))
                         }
                     }
                     .animation(.spring(response: 0.35, dampingFraction: 0.8), value: locked)
@@ -252,7 +232,7 @@ struct MainView: View {
                 .menuStyle(.borderlessButton).fixedSize().font(.system(size: 12))
                 Spacer()
                 Menu {
-                    Section("Lock again when its window closes") {
+                    Section("For newly added apps: lock again when closed") {
                         ForEach(AppModel.closeDelayChoices, id: \.0) { c in
                             Button { model.actions.setCloseDelay(c.0) } label: {
                                 if c.0 == model.lockCloseDelay { Label(c.1, systemImage: "checkmark") } else { Text(c.1) }
@@ -264,14 +244,62 @@ struct MainView: View {
                         if model.lockHidesNotifications { Label("Hide notification previews", systemImage: "checkmark") }
                         else { Text("Hide notification previews") }
                     }
-                } label: {
-                    Label("Options", systemImage: "slider.horizontal.3")
-                }
+                } label: { Label("Defaults", systemImage: "slider.horizontal.3") }
                 .menuStyle(.borderlessButton).fixedSize().font(.system(size: 11))
-                .help("When to lock again, and notification previews")
+                .help("Settings new apps start with. Click an app above to change its own settings.")
             }
         }
     }
+
+    private func lockRow(_ app: AppModel.AppItem) -> some View {
+        let open = app.detail == "unlocked"
+        return Button { model.openLockApp = app.id } label: {
+            HStack(spacing: 8) {
+                ZStack(alignment: .bottomTrailing) {
+                    AppIcon(bundleID: app.id, size: 26)
+                    Image(systemName: open ? "lock.open.fill" : "lock.fill")
+                        .font(.system(size: 7, weight: .bold)).foregroundStyle(.white)
+                        .padding(2.5).background(Circle().fill(open ? Color.orange : Color.green))
+                        .offset(x: 3, y: 3)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 5) {
+                        Text(app.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                        if open {
+                            Text("unlocked").font(.system(size: 9, weight: .semibold)).foregroundStyle(.orange)
+                                .padding(.horizontal, 4).padding(.vertical, 1)
+                                .background(Capsule().fill(Color.orange.opacity(0.15)))
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        chip("xmark.square", short(close: app.closeDelay), help: "Locks again \(AppModel.closeText(app.closeDelay))")
+                        chip("clock", short(background: app.relockMinutes), help: "Locks again \(AppModel.backgroundText(app.relockMinutes))")
+                        if app.hidesNotifications { chip("bell.slash", nil, help: "Notification previews hidden") }
+                    }
+                }
+                Spacer()
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
+            }
+            .padding(.vertical, 4).padding(.horizontal, 6)
+            .contentShape(Rectangle())
+            .background(RoundedRectangle(cornerRadius: 8).fill(model.openLockApp == app.id ? Color.accentColor.opacity(0.15) : .clear))
+        }
+        .buttonStyle(.plain)
+        .opacity(model.lockOn ? 1 : 0.45)
+        .help("\(app.name): click for its lock settings")
+    }
+
+    private func chip(_ symbol: String, _ text: String?, help: String) -> some View {
+        HStack(spacing: 2) {
+            Image(systemName: symbol).font(.system(size: 9))
+            if let t = text { Text(t).font(.system(size: 10)) }
+        }
+        .foregroundStyle(.secondary)
+        .help(help)
+    }
+
+    private func short(close v: Int) -> String { v == 0 ? "instantly" : v == -1 ? "never" : (v < 60 ? "\(v) s" : "\(v / 60) min") }
+    private func short(background v: Int) -> String { v == 0 ? "on switch" : (v >= 60 ? "\(v / 60) h" : "\(v) min") }
 
     // Present
     private var presentCard: some View {
@@ -386,4 +414,75 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     }
 
     var windowNumber: Int? { window?.windowNumber }
+}
+
+
+/// Per-app App lock settings, shown when an app in the App lock card is clicked.
+struct LockAppSettings: View {
+    var app: AppModel.AppItem
+    @ObservedObject var model: AppModel
+    var dismiss: () -> Void
+    @State private var confirmRemove = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                AppIcon(bundleID: app.id, size: 36)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(app.name).font(.system(size: 15, weight: .semibold))
+                    Text(app.detail == "unlocked" ? "Unlocked right now" : "Locked")
+                        .font(.system(size: 11)).foregroundStyle(app.detail == "unlocked" ? .orange : .secondary)
+                }
+                Spacer()
+                if app.detail == "unlocked" {
+                    Button { model.actions.lockNow(app.id) } label: { Label("Lock now", systemImage: "lock.fill") }
+                        .controlSize(.small)
+                }
+            }
+            Divider()
+            setting("Lock again when its window closes", symbol: "xmark.square") {
+                Picker("", selection: Binding(get: { app.closeDelay }, set: { model.actions.setAppLockSetting(app.id, "close", $0) })) {
+                    ForEach(AppModel.closeDelayChoices, id: \.0) { Text($0.1).tag($0.0) }
+                }
+                .labelsHidden().frame(width: 140)
+            }
+            setting("Lock again in the background", symbol: "clock") {
+                Picker("", selection: Binding(get: { app.relockMinutes }, set: { model.actions.setAppLockSetting(app.id, "background", $0) })) {
+                    ForEach(AppModel.backgroundChoices, id: \.0) { Text($0.1).tag($0.0) }
+                }
+                .labelsHidden().frame(width: 140)
+            }
+            setting("Hide notification previews", symbol: "bell.slash") {
+                Toggle("", isOn: Binding(get: { app.hidesNotifications },
+                                         set: { model.actions.setAppLockSetting(app.id, "notifications", $0 ? 1 : 0) }))
+                    .toggleStyle(.switch).controlSize(.small).labelsHidden()
+            }
+            Text("Making these looser asks for Touch ID.").font(.system(size: 10)).foregroundStyle(.tertiary)
+            Divider()
+            HStack {
+                if confirmRemove {
+                    Text("Stop locking \(app.name)?").font(.system(size: 12))
+                    Spacer()
+                    Button("Cancel") { confirmRemove = false }.controlSize(.small)
+                    Button("Stop locking") { dismiss(); model.actions.stopLocking(app.id) }
+                        .controlSize(.small).tint(.red).buttonStyle(.borderedProminent)
+                } else {
+                    Button(role: .destructive) { confirmRemove = true } label: { Label("Stop locking \(app.name)", systemImage: "lock.open") }
+                        .buttonStyle(.borderless).foregroundStyle(.red).font(.system(size: 12))
+                    Spacer()
+                    Button("Done", action: dismiss).keyboardShortcut(.defaultAction).controlSize(.small)
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: 360)
+    }
+
+    private func setting<C: View>(_ title: String, symbol: String, @ViewBuilder control: () -> C) -> some View {
+        HStack {
+            Label(title, systemImage: symbol).font(.system(size: 12))
+            Spacer()
+            control()
+        }
+    }
 }

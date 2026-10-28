@@ -10,8 +10,9 @@ Open sharemask from Finder, Launchpad or the Dock (or **Open sharemask…**, ⌘
 - **Start sharing / Stop**, **Panic** and **What others see** (a live preview of the shared feed).
 - **Masks**: every app you've drawn masks for, each with an on/off switch and an edit button;
   **Add an app** opens the region editor for it.
-- **App lock**: each locked app with its status and a lock switch, **Lock now** for unlocked
-  apps, **Add an app** (running apps or any app in Applications), and *Lock on close* timing.
+- **App lock**: each locked app with its status and a summary of its settings; click one to change
+  when it relocks, hide its notification previews, lock it now or stop locking it. **Add an app**
+  (running apps or any app in Applications) and *Defaults* for new apps.
   See [App lock](APP-LOCK.md).
 - **Present**: appears with Extend / Mirror buttons when a TV or projector is connected.
   See [Presenting in a room](PRESENTING.md).
