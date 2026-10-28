@@ -23,6 +23,8 @@ Lock apps on your own screen, so someone using your unlocked Mac can't open them
   | leave it in the background longer than *Relock after* | yes |
   | lock the screen / let the display sleep | yes (optional) |
 
+- **Editing masks of a locked app**: Edit regions on a locked app asks you to unlock it first, then
+  opens the editor on its window.
 - **Other desktops**: if you swipe to another desktop (or the app is full screen on its own
   desktop), the app isn't treated as closed; it relocks only when you actually close its window.
 - **Notification previews** (off by default; App lock ▸ Options ▸ *Hide notification previews*):

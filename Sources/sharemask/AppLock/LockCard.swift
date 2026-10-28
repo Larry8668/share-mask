@@ -22,7 +22,13 @@ final class LockCard: NSObject, NSTextFieldDelegate {
 
     /// - subject: what this card is for (one card at a time; a new request replaces the old one).
     func show(subject: String, title: String, detail: String, icon: NSImage?, completion: @escaping (Bool) -> Void) {
-        if self.subject == subject, isVisible { panel?.makeKeyAndOrderFront(nil); return }
+        if self.subject == subject, isVisible {
+            // Same card already up (e.g. the app was clicked, then Edit regions): keep it, but let
+            // the newest request decide what happens after unlocking.
+            onResult = completion
+            panel?.makeKeyAndOrderFront(nil)
+            return
+        }
         close(result: false)
         self.subject = subject
         onResult = completion
