@@ -1,4 +1,5 @@
 import AppKit
+import CGSPrivate
 import UniformTypeIdentifiers
 import ApplicationServices
 import Carbon
@@ -1250,6 +1251,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
                 dump(AXUIElementCreateApplication(nc.processIdentifier), 0)
+            }
+        case "desktop-check":
+            for b in [AppDelegate.testAppID, "net.whatsapp.WhatsApp"] {
+                if let a = NSRunningApplication.runningApplications(withBundleIdentifier: b).first {
+                    Log.info("script: \(b) on another desktop = \(locker.isOnAnotherDesktop(a)) (active desktop \(SMActiveSpace()))")
+                }
+            }
+        case "fullscreen-away-back":   // the reported case: app on its own desktop, user swipes away and back
+            guard let te = NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first else { break }
+            te.activate()
+            var v: CFTypeRef?
+            AXUIElementCopyAttributeValue(AXUIElementCreateApplication(te.processIdentifier), kAXWindowsAttribute as CFString, &v)
+            guard let w = (v as? [AXUIElement])?.first else { break }
+            AXUIElementSetAttributeValue(w, "AXFullScreen" as CFString, kCFBooleanTrue)
+            Log.info("script: test app → full screen (own desktop)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first?.activate(options: .activateAllWindows)
+                Log.info("script: switched away to Finder's desktop")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.scriptAction("desktop-check") }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                    te.activate()
+                    Log.info("script: back to the test app's desktop")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        AXUIElementSetAttributeValue(w, "AXFullScreen" as CFString, kCFBooleanFalse)
+                        Log.info("script: test app out of full screen")
+                    }
+                }
             }
         case "close-reopen-frontmost":   // the real case: app stays frontmost, window closed, reopened from the Dock
             NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first?.activate()

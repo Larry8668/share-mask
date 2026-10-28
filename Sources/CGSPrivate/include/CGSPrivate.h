@@ -13,4 +13,11 @@ BOOL SMScreenWatcherAPIAvailable(void);
 /// capture is stopped. Returns NO when the API is unavailable.
 BOOL SMScreenWatcherPresent(void);
 
+/// Spaces ("desktops") API, read-only. YES if the needed SkyLight symbols resolved.
+BOOL SMSpacesAPIAvailable(void);
+/// The active Space id (0 if unavailable).
+uint64_t SMActiveSpace(void);
+/// Space ids a window belongs to (empty if none / unavailable).
+NSArray<NSNumber *> *SMSpacesForWindow(uint32_t windowID);
+
 NS_ASSUME_NONNULL_END

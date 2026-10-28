@@ -55,7 +55,8 @@ window; ⌃⌥K shows every key while you're sharing.
 
 ## Privacy at a glance
 
-Everything happens on your Mac. Frames are never saved or sent anywhere; the only network request
+Everything happens on your Mac, and it's light: about 0.5% CPU while waiting for a call
+([numbers](docs/PERFORMANCE.md)). Frames are never saved or sent anywhere; the only network request
 is a daily check for a new version on GitHub (you can turn it off). Details:
 [Privacy & data](docs/PRIVACY.md).
 
@@ -68,6 +69,7 @@ is a daily check for a new version on GitHub (you can turn it off). Details:
 | [Presenting in a room](docs/PRESENTING.md) | TVs and projectors over HDMI / AirPlay, multiple monitors |
 | [Configuration](docs/CONFIGURATION.md) | `presets.json`: masks, rules, allowlist, shortcuts |
 | [Privacy & data](docs/PRIVACY.md) | What's stored, network use, logs |
+| [Performance](docs/PERFORMANCE.md) | Battery and CPU use, and how idle cost went from 38% to 0.5% |
 | [How it works](docs/HOW-IT-WORKS.md) | The proxy-display design, measured behaviour, performance |
 | [Building from source](docs/BUILDING.md) · [Porting](docs/PORTING.md) · [Releasing](packaging/RELEASING.md) | For developers |
 

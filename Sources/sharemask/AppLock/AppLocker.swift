@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import CGSPrivate
 
 /// Keeps locked apps hidden until unlocked. A guard against casual snooping on an unlocked Mac,
 /// not a security boundary (someone logged in as you can still read an app's files).
@@ -23,6 +24,12 @@ final class AppLocker {
     /// For a few seconds after unlocking (the app is un-hiding) an empty window list is not trusted.
     static let unlockGrace: TimeInterval = 3
     private var unlockedAt: [String: Date] = [:]
+    /// Switching desktops (Spaces, or away from a full-screen app) makes Accessibility report zero
+    /// windows for an app whose window is on another desktop — indistinguishable from "closed" by
+    /// count alone. A drop to zero within this long after a Space change is treated as "away".
+    static let spaceChangeWindow: TimeInterval = 2
+    private var lastSpaceChange = Date.distantPast
+    private var awayOnOtherSpace: Set<String> = []
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
     var onChange: (() -> Void)?
@@ -53,6 +60,11 @@ final class AppLocker {
             guard let self = self, let b = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier,
                   self.unlocked[b] != nil else { return }
             self.relock(b, reason: "app quit")
+        })
+        observers.append(ws.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self = self else { return }
+            self.lastSpaceChange = Date()
+            if !self.unlocked.isEmpty { Log.info("app lock: desktop (Space) changed") }
         })
         observers.append(ws.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
             if self?.config.relockOnSleep == true { self?.lockAll(reason: "display sleep") }
@@ -87,6 +99,29 @@ final class AppLocker {
         onChange?()
     }
 
+    /// True if the app's main window is on a desktop (Space) other than the active one — e.g. you
+    /// swiped to another desktop, or the app is full screen. A window closed with the red button
+    /// (many apps just hide it) stays on the active desktop, so this tells the two apart.
+    func isOnAnotherDesktop(_ app: NSRunningApplication) -> Bool {
+        guard SMSpacesAPIAvailable() else { return false }
+        let active = SMActiveSpace()
+        guard active != 0, let all = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return false }
+        let mains = all.filter {
+            ($0[kCGWindowOwnerPID as String] as? pid_t) == app.processIdentifier && (($0[kCGWindowLayer as String] as? Int) ?? 1) == 0
+                && (($0[kCGWindowAlpha as String] as? Double) ?? 0) > 0
+                && ((($0[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }).map { $0.width > 200 && $0.height > 150 } ?? false)
+        }
+        for w in mains {
+            guard let id = w[kCGWindowNumber as String] as? UInt32 else { continue }
+            let spaces = SMSpacesForWindow(id).map { $0.uint64Value }
+            if !spaces.isEmpty && !spaces.contains(active) {
+                Log.info("app lock: \(app.bundleIdentifier ?? "?") window \(id) is on desktop \(spaces) (active \(active))")
+                return true
+            }
+        }
+        return false
+    }
+
     // MARK: Reopen detection
     //
     // Clicking the Dock icon of an app that is still frontmost (its window was just closed) sends no
@@ -110,7 +145,7 @@ final class AppLocker {
     fileprivate func windowCreated(pid: pid_t) {
         guard let app = NSRunningApplication(processIdentifier: pid), let b = app.bundleIdentifier, unlocked[b] != nil else { return }
         // Was it at zero windows (closed) just before this window appeared?
-        let wasClosed = zeroSince[b] != nil || lastWindowCount[b] == 0
+        let wasClosed = !awayOnOtherSpace.contains(b) && (zeroSince[b] != nil || lastWindowCount[b] == 0)
         Log.info("app lock: \(b) created a window (was closed: \(wasClosed))")
         if wasClosed, shouldRelockOnReopen(b, closedSince: zeroSince[b] ?? .distantPast) {
             relockReopened(app, b, via: "window created")
@@ -144,6 +179,7 @@ final class AppLocker {
         guard unlocked[b] != nil else { return }
         unlocked[b] = nil
         hadWindow.remove(b)
+        awayOnOtherSpace.remove(b)
         unobserve(b)
         zeroSince[b] = nil
         lastWindowCount[b] = nil
@@ -234,6 +270,21 @@ final class AppLocker {
                     Log.info("app lock: \(b) windows \(lastWindowCount[b].map(String.init) ?? "?") → \(n)\(app.isHidden ? " (hidden)" : "")")
                     lastWindowCount[b] = n
                 }
+                if n > 0 && awayOnOtherSpace.contains(b) {
+                    awayOnOtherSpace.remove(b)
+                    Log.info("app lock: \(b) window visible again on this desktop (was on another desktop, not closed)")
+                    hadWindow.insert(b); zeroSince[b] = nil
+                    continue
+                }
+                if n == 0, hadWindow.contains(b), zeroSince[b] == nil, isOnAnotherDesktop(app) {
+                    if !awayOnOtherSpace.contains(b) { Log.info("app lock: \(b) has no windows here but its window is on another desktop → not relocking") }
+                    awayOnOtherSpace.insert(b)
+                } else if n == 0, hadWindow.contains(b), zeroSince[b] == nil, !SMSpacesAPIAvailable(),
+                   Date().timeIntervalSince(lastSpaceChange) < AppLocker.spaceChangeWindow {
+                    if !awayOnOtherSpace.contains(b) { Log.info("app lock: \(b) has no windows right after a desktop switch → on another desktop, not relocking") }
+                    awayOnOtherSpace.insert(b)
+                }
+                if n == 0 && awayOnOtherSpace.contains(b) { continue }
                 if n > 0 {
                     if let since = zeroSince[b], shouldRelockOnReopen(b, closedSince: since) {
                         relockReopened(app, b, via: "window list")
