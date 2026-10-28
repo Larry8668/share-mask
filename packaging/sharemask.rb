@@ -17,13 +17,19 @@ cask "sharemask" do
   desc "Share your screen with chosen app regions pixellated only on the shared feed"
   homepage "https://github.com/Larry8668/share-mask"
 
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
   depends_on arch: :arm64
 
   app "sharemask.app"
 
   postflight do
     system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{appdir}/sharemask.app"], sudo: false
+    saved = File.expand_path("~/Library/Caches/sharemask-agent.plist.upgrade")
+    agent = File.expand_path("~/Library/LaunchAgents/dev.sharemask.keepalive.plist")
+    if File.exist?(saved)
+      FileUtils.mv(saved, agent)
+      system_command "/bin/launchctl", args: ["bootstrap", "gui/#{Process.uid}", agent], must_succeed: false
+    end
   end
 
   caveats <<~EOS
@@ -32,10 +38,20 @@ cask "sharemask" do
     in System Settings → Privacy & Security → Screen & System Audio Recording.
   EOS
 
-  uninstall launchctl: "dev.sharemask.keepalive",
-            delete:    "~/Library/LaunchAgents/dev.sharemask.keepalive.plist"
+  # App lock's optional keep-alive agent. On uninstall it's unloaded and set aside (no sudo); on an
+  # upgrade the new version's postflight puts it back and relaunches sharemask, so App lock keeps
+  # running across upgrades. A plain uninstall leaves only the set-aside copy in ~/Library/Caches.
+  uninstall script: {
+    executable: "/bin/sh",
+    args:       ["-c", 'launchctl bootout "gui/$(id -u)/dev.sharemask.keepalive" 2>/dev/null; ' \
+                       'P="$HOME/Library/LaunchAgents/dev.sharemask.keepalive.plist"; ' \
+                       '[ -f "$P" ] && mv -f "$P" "$HOME/Library/Caches/sharemask-agent.plist.upgrade"; true'],
+    sudo:       false,
+  }
 
   zap trash: [
+    "~/Library/LaunchAgents/dev.sharemask.keepalive.plist",
+    "~/Library/Caches/sharemask-agent.plist.upgrade",
     "~/.config/sharemask",
     "~/Library/Logs/sharemask",
   ]
