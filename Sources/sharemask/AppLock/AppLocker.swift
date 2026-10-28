@@ -126,8 +126,10 @@ final class AppLocker {
     /// (many apps just hide it) stays on the active desktop, so this tells the two apart.
     func isOnAnotherDesktop(_ app: NSRunningApplication) -> Bool {
         guard SMSpacesAPIAvailable() else { return false }
-        let active = SMActiveSpace()
-        guard active != 0, let all = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return false }
+        // Every monitor shows its own Space ("Displays have separate Spaces"), so a window on the
+        // external monitor is visible even though it isn't on the active (focused) Space.
+        let current = Set(SMCurrentSpaces().map { $0.uint64Value })
+        guard !current.isEmpty, let all = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return false }
         let known = app.bundleIdentifier.flatMap { visibleWindowIDs[$0] } ?? []
         guard !known.isEmpty else { return false }   // never saw it visible → can't claim it's elsewhere
         let mains = all.filter {
@@ -137,8 +139,8 @@ final class AppLocker {
         for w in mains {
             guard let id = w[kCGWindowNumber as String] as? UInt32 else { continue }
             let spaces = SMSpacesForWindow(id).map { $0.uint64Value }
-            if !spaces.isEmpty && !spaces.contains(active) {
-                Log.info("app lock: \(app.bundleIdentifier ?? "?") window \(id) is on desktop \(spaces) (active \(active))")
+            if !spaces.isEmpty && current.isDisjoint(with: spaces) {
+                Log.info("app lock: \(app.bundleIdentifier ?? "?") window \(id) is on desktop \(spaces) (shown: \(current.sorted()))")
                 return true
             }
         }
