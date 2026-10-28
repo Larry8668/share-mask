@@ -76,3 +76,24 @@ final class AppLockConfigTests: XCTestCase {
         XCTAssertFalse(AppLockStore.verify("nope", against: h))
     }
 }
+
+final class AppLockPerAppTests: XCTestCase {
+    func testPerAppOverridesFallBackToDefaults() {
+        var c = AppLockConfig()
+        c.apps = ["a", "b"]; c.relockMinutes = 5; c.closeRelockSeconds = 0; c.hideNotifications = false
+        c.setAppSettings("a") { $0.closeRelockSeconds = 30; $0.hideNotifications = true }
+        XCTAssertEqual(c.closeDelay(for: "a"), 30)
+        XCTAssertEqual(c.closeDelay(for: "b"), 0)          // default
+        XCTAssertEqual(c.relockMinutes(for: "a"), 5)        // not overridden → default
+        XCTAssertTrue(c.hidesNotifications(for: "a"))
+        XCTAssertFalse(c.hidesNotifications(for: "b"))
+        XCTAssertTrue(c.anyHidesNotifications)
+    }
+    func testSettingsFromOlderVersionsDecode() throws {
+        let v025 = #"{"enabled":true,"apps":["net.whatsapp.WhatsApp"],"relockMinutes":5,"relockOnSleep":true,"guardQuit":true,"keepAlive":true,"closeRelockSeconds":0,"hideNotifications":true}"#
+        let c = try JSONDecoder().decode(AppLockConfig.self, from: v025.data(using: .utf8)!)
+        XCTAssertNil(c.appSettings)
+        XCTAssertTrue(c.hidesNotifications(for: "net.whatsapp.WhatsApp"))   // old global value still applies
+        XCTAssertEqual(c.closeDelay(for: "net.whatsapp.WhatsApp"), 0)
+    }
+}

@@ -22,6 +22,28 @@ struct AppLockConfig: Codable, Equatable {
     /// Cover notification banners from locked apps on your own screen (off by default).
     var hideNotifications: Bool?
     var hidesNotifications: Bool { hideNotifications ?? false }
+
+    /// Per-app overrides. Anything not set falls back to the defaults above (which is also what
+    /// newly added apps get). Optional for decoding settings saved by older versions.
+    struct AppSettings: Codable, Equatable {
+        var closeRelockSeconds: Int?
+        var relockMinutes: Int?
+        var hideNotifications: Bool?
+    }
+    var appSettings: [String: AppSettings]?
+
+    func closeDelay(for b: String) -> Int { appSettings?[b]?.closeRelockSeconds ?? closeDelay }
+    func relockMinutes(for b: String) -> Int { appSettings?[b]?.relockMinutes ?? relockMinutes }
+    func hidesNotifications(for b: String) -> Bool { appSettings?[b]?.hideNotifications ?? hidesNotifications }
+    var anyHidesNotifications: Bool { apps.contains { hidesNotifications(for: $0) } }
+
+    mutating func setAppSettings(_ b: String, _ change: (inout AppSettings) -> Void) {
+        var all = appSettings ?? [:]
+        var a = all[b] ?? AppSettings()
+        change(&a)
+        all[b] = a
+        appSettings = all
+    }
 }
 
 enum AppLockStore {

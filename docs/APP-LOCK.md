@@ -23,6 +23,11 @@ Lock apps on your own screen, so someone using your unlocked Mac can't open them
   | leave it in the background longer than *Relock after* | yes |
   | lock the screen / let the display sleep | yes (optional) |
 
+- **Per-app settings**: click an app in the App lock card to set, for that app alone, when it locks
+  again after its window closes (instantly, 30 s, 1 min, 5 min, never), after how long in the
+  background, and whether its notification previews are hidden. **Lock now** and **Stop locking**
+  are there too. *Defaults* (bottom of the card) is what newly added apps start with. Loosening any
+  of these asks for Touch ID; tightening doesn't.
 - **Editing masks of a locked app**: Edit regions on a locked app asks you to unlock it first, then
   opens the editor on its window.
 - **Other desktops**: if you swipe to another desktop (or the app is full screen on its own
