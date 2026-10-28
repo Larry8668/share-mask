@@ -777,7 +777,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// If App lock wants the keep-alive agent and this instance wasn't started by it, start the
     /// agent's instance and exit (the new one waits for us to go). Returns true when exiting.
     private func handOverToKeepAliveIfNeeded() -> Bool {
-        let want = locker.isActive && locker.config.keepAlive && !CommandLine.arguments.contains("--no-handover")   // dev/test only
+        // Test runs (--no-handover / test Keychain entry) must never install OR remove the user's agent.
+        if CommandLine.arguments.contains("--no-handover") || CommandLine.arguments.contains("--lock-test-store")
+            || ProcessInfo.processInfo.environment["SHAREMASK_LOCK_TEST_STORE"] != nil { return false }
+        let want = locker.isActive && locker.config.keepAlive
         let exe = Bundle.main.executablePath
         if want && !KeepAlive.runningUnderAgent {
             if KeepAlive.installedExecutable != exe || !KeepAlive.isLoaded { KeepAlive.install() } else { KeepAlive.kickstart() }
