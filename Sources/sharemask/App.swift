@@ -287,6 +287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         welcome.onFinished = { [weak self] in self?.mainWindow.show() }
         wireModelActions()
         mainWindow.onWillShow = { [weak self] in self?.updateModel() }
+        NSApp.mainMenu = AppDelegate.makeMainMenu()
         welcome.onRelaunch = { [weak self] in self?.relaunch() }
         if CommandLine.arguments.contains("--show-main") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.mainWindow.show() }
@@ -724,6 +725,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.waitForWindow(app, attempts: attempts - 1, then: then) }
+    }
+
+    /// Standard menu bar for while the sharemask window is open (the app is a regular app then).
+    /// Without it ⌘W, ⌘Q, ⌘M and copy/paste do nothing, because those come from the main menu.
+    static func makeMainMenu() -> NSMenu {
+        let main = NSMenu()
+        func sub(_ title: String, _ items: [NSMenuItem]) {
+            let m = NSMenu(title: title)
+            items.forEach { m.addItem($0) }
+            let it = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            it.submenu = m
+            main.addItem(it)
+        }
+        func item(_ t: String, _ a: Selector?, _ k: String, _ mods: NSEvent.ModifierFlags = .command) -> NSMenuItem {
+            let i = NSMenuItem(title: t, action: a, keyEquivalent: k)
+            i.keyEquivalentModifierMask = mods
+            return i
+        }
+        sub("sharemask", [
+            item("About sharemask", #selector(NSApplication.orderFrontStandardAboutPanel(_:)), ""),
+            .separator(),
+            item("Hide sharemask", #selector(NSApplication.hide(_:)), "h"),
+            item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
+            .separator(),
+            item("Quit sharemask", #selector(NSApplication.terminate(_:)), "q"),
+        ])
+        sub("File", [item("Close Window", #selector(NSWindow.performClose(_:)), "w")])
+        sub("Edit", [
+            item("Undo", Selector(("undo:")), "z"), item("Redo", Selector(("redo:")), "z", [.command, .shift]),
+            .separator(),
+            item("Cut", #selector(NSText.cut(_:)), "x"), item("Copy", #selector(NSText.copy(_:)), "c"),
+            item("Paste", #selector(NSText.paste(_:)), "v"), item("Select All", #selector(NSText.selectAll(_:)), "a"),
+        ])
+        sub("Window", [
+            item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"),
+            item("Zoom", #selector(NSWindow.performZoom(_:)), ""),
+        ])
+        return main
     }
 
     // MARK: Windows (main + onboarding)
@@ -1392,6 +1431,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             }
+        case "cmd-w":   // test: real ⌘W key press (needs Accessibility)
+            let src = CGEventSource(stateID: .hidSystemState)
+            let down = CGEvent(keyboardEventSource: src, virtualKey: 13, keyDown: true); down?.flags = .maskCommand
+            let up = CGEvent(keyboardEventSource: src, virtualKey: 13, keyDown: false); up?.flags = .maskCommand
+            down?.post(tap: .cghidEventTap); up?.post(tap: .cghidEventTap)
         case "edit-locked":   // test: open the region editor for the (locked, hidden) test app
             if let a = NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first {
                 pickRegion(pid: a.processIdentifier, bundleID: AppDelegate.testAppID)
