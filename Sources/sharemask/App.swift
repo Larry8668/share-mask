@@ -472,6 +472,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Hold-to-reveal: while the hotkey is down, the frontmost app is shown unmasked.
     private func setReveal(_ on: Bool) {
         guard let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return }
+        if on, pipeline?.panic == true {
+            // Panic deliberately wins over everything; say so instead of silently doing nothing.
+            Log.info("reveal ignored: panic is on")
+            alerts.show(title: "Panic is on", detail: "Everything stays blurred. Press ⌃⌥B to turn panic off, then hold ⌃⌥R to reveal.",
+                        primary: "OK", secondary: "Turn panic off", timeout: 4,
+                        onPrimary: {}, onSecondary: { [weak self] in self?.togglePanic() })
+            return
+        }
         if on {
             options.revealed.insert(front)
             Log.info("reveal ON for \(front)")

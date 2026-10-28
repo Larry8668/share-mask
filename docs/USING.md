@@ -90,6 +90,12 @@ press Start).
 Launch flags: `--demo` adds a hard-coded pixellate rect at (100,100,400,300) px for testing;
 `--probe` runs the display diagnostics CLI.
 
+## Panic and reveal
+
+Panic (⌃⌥B) blurs everything and wins over every other setting: while it's on, hold-to-reveal (⌃⌥R)
+does nothing and sharemask says so. Turn panic off first. Apps you've locked with App lock are
+blurred whole in shares; reveal shows them like any other app.
+
 ## Notification banners while sharing
 
 "Notification banners" (Masks ▸, on by default) blacks out any banner that appears while you share.
