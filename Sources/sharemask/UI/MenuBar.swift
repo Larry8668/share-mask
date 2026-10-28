@@ -216,7 +216,11 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
     // MARK: State → UI
 
+    private var currentIcon: IconState?
+
     func setIcon(_ state: IconState) {
+        guard state != currentIcon else { return }   // called every second; only redraw on change
+        currentIcon = state
         let (symbol, color, tip): (String, NSColor, String)
         switch state {
         case .idle: (symbol, color, tip) = ("eye.slash", .secondaryLabelColor, "sharemask: proxy stopped")

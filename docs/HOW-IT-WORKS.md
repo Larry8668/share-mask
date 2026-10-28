@@ -70,6 +70,24 @@ Measured on an M-series MacBook at 2940×1912 (macOS 27.0.1): capture→present 
 pipeline 2.6 ms, GPU 1.3–1.5 ms. The fps figure follows screen activity: ScreenCaptureKit only
 delivers frames when content changes, so a static desktop reads ~8–10 fps and rises to 60 under motion.
 
+### Battery and CPU
+
+Measured on an Apple Silicon MacBook (0.2.5, steady state):
+
+| State | CPU | Wake-ups/s |
+|---|---|---|
+| Standby, App lock on, window closed | 0.5% | ~6 |
+| Standby, app window open | 2.3% | ~6.5 |
+| Hiding notification previews for locked apps | 0.8% | ~7.5 |
+| Capturing during a call (60 fps pipeline) | ~5% | ~31 |
+
+Everything that polls runs only while it's needed: window tracking and the redraw/watchdog timers
+only while the sharemask display exists; the notification watcher only while capturing or hiding
+locked apps' previews (2×/s, 10×/s only while a banner is on screen); App lock's check 4×/s only
+while a locked app is unlocked, otherwise once a second; menus and the app window rebuild only when
+visible. The status orb animates only while sharing (a repeat-forever SwiftUI animation cost ~35%
+of a core in 0.2.4).
+
 ## Source layout
 
 ```

@@ -104,6 +104,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let keysPanel = KeysPanel()
     private let welcome = WelcomeWindow()
     private let notifications = NotificationWatcher()
+    private var menuNeedsFullRefresh = true
+
+    /// Notification banners only matter while capturing (share masks) or when locked apps'
+    /// previews are hidden; otherwise the watcher doesn't run at all.
+    private func updateNotificationWatcherNeed() {
+        let capturing = pipeline.map { $0.state == .running || $0.state == .starting } ?? false
+        let covering = locker.isActive && locker.config.hidesNotifications
+        notifications.needed = capturing || covering
+    }
     private var isNewUser = false
     let model = AppModel()
     private lazy var mainWindow = MainWindowController(model: model)
@@ -157,7 +166,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self = self else { return }
             self.pipeline?.options = self.effectiveOptions
         }
-        notifications.start()
         syncNotificationCovers()
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
             if let a = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, a.bundleIdentifier != Bundle.main.bundleIdentifier { self?.lastOtherFront = a }
@@ -208,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             toggleUpdateChecks: { [weak self] in self?.updates.enabled.toggle(); self?.refreshMenu() },
             removeDisplay: { [weak self] in self?.bringBackStrays(forceRemove: true) },
             quit: { NSApp.terminate(nil) }))
-        menuBar.onMenuWillOpen = { [weak self] in self?.refreshMenu(); self?.refreshAppMenus() }
+        menuBar.onMenuWillOpen = { [weak self] in self?.menuNeedsFullRefresh = true; self?.refreshMenu(); self?.refreshAppMenus() }
 
         updates.onChange = { [weak self] in self?.refreshMenu() }
         updates.start()
@@ -277,7 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         welcome.onOpenMenu = { [weak self] in self?.menuBar.openMenu() }
         welcome.onFinished = { [weak self] in self?.mainWindow.show() }
         wireModelActions()
-        updateModel()
+        mainWindow.onWillShow = { [weak self] in self?.updateModel() }
         welcome.onRelaunch = { [weak self] in self?.relaunch() }
         if CommandLine.arguments.contains("--show-main") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.mainWindow.show() }
@@ -310,6 +318,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         runTestHooks()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.checkStrays(); self?.refreshMenu() }
+        refreshTimer?.tolerance = 0.3
         refreshMenu()
         if ProcessInfo.processInfo.environment["SHAREMASK_DUMP_WINDOWS"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.dumpWindows() }
@@ -641,12 +650,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if p.state.isRunning, let m = meetings { latency += "\n" + m.statusText }
         }
 
-        updateModel()
-        menuBar.updateAppLock(appLockModel())
-        menuBar.updatePresent(AppDelegate.externalScreens(), active: pipeline?.output ?? .proxy)
-        menuBar.updateScreens(AppDelegate.shareableScreens(), selected: pipeline?.source.id ?? CGMainDisplayID())
-        menuBar.updateVersion(current: UpdateChecker.currentVersion, status: updates.status,
-                              checksEnabled: updates.enabled, homebrew: UpdateChecker.installedWithHomebrew)
+        // The window's data and the submenus are only rebuilt when someone can see them (menu being
+        // opened, window visible); the once-a-second timer otherwise only updates icon + status.
+        updateNotificationWatcherNeed()
+        if mainWindow.isVisible { updateModel() }
+        if menuNeedsFullRefresh {
+            menuNeedsFullRefresh = false
+            menuBar.updateAppLock(appLockModel())
+            menuBar.updatePresent(AppDelegate.externalScreens(), active: pipeline?.output ?? .proxy)
+            menuBar.updateScreens(AppDelegate.shareableScreens(), selected: pipeline?.source.id ?? CGMainDisplayID())
+            menuBar.updateVersion(current: UpdateChecker.currentVersion, status: updates.status,
+                                  checksEnabled: updates.enabled, homebrew: UpdateChecker.installedWithHomebrew)
+        }
         menuBar.update(status: status, latency: latency, warning: warning, running: running, panic: panic,
                        regionsEnabled: regions, pointerGuard: pointerGuardEnabled, hud: hudEnabled,
                        hotkeys: config.config.hotkeys, needsPermission: permissionMissing,

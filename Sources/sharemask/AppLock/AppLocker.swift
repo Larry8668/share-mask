@@ -37,8 +37,10 @@ final class AppLocker {
     var isActive: Bool { config.enabled && !config.apps.isEmpty }
     func isLocked(_ bundleID: String) -> Bool { isActive && config.apps.contains(bundleID) && unlocked[bundleID] == nil }
 
+    private var started = false
     func start() {
-        guard timer == nil else { return }
+        guard !started else { return }
+        started = true
         let ws = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didActivateApplicationNotification, NSWorkspace.didLaunchApplicationNotification,
                      NSWorkspace.didUnhideApplicationNotification] {
@@ -58,7 +60,7 @@ final class AppLocker {
         observers.append(DistributedNotificationCenter.default().addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
             if self?.config.relockOnSleep == true { self?.lockAll(reason: "screen locked") }
         })
-        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.enforce() }
+        reschedule()
         enforce()   // first thing after (re)launch: re-hide anything locked
     }
 
@@ -69,6 +71,7 @@ final class AppLocker {
         guard c != config else { return }
         config = c
         AppLockStore.save(c)
+        reschedule()
         Log.info("app lock config: enabled=\(c.enabled) apps=\(c.apps) relock=\(c.relockMinutes)m sleep=\(c.relockOnSleep) quit=\(c.guardQuit) keepAlive=\(c.keepAlive) password=\(c.passwordHash != nil)")
         enforce()
         onChange?()
@@ -200,7 +203,28 @@ final class AppLocker {
         if activated { promptUnlock(app) }
     }
 
-    /// Runs twice a second: hide locked apps that are showing, relock idle unlocked apps.
+    private var fastTimer = false
+    /// 4×/s while some locked app is unlocked (reopen detection needs it); otherwise once a second
+    /// as a backstop (launch/activate/unhide notifications do the real work); no timer at all while
+    /// App lock is off.
+    private func reschedule() {
+        let wantFast = isActive && !unlocked.isEmpty
+        if !isActive { timer?.invalidate(); timer = nil; return }
+        if timer != nil && wantFast == fastTimer { return }
+        timer?.invalidate()
+        let interval = wantFast ? 0.25 : 1.0
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in self?.tick() }
+        timer?.tolerance = interval * 0.2
+        fastTimer = wantFast
+    }
+
+    private func tick() {
+        guard isActive else { return }
+        enforce()
+        reschedule()
+    }
+
+    /// Hide locked apps that are showing, relock idle unlocked apps.
     private func enforce() {
         guard isActive else { return }
         let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
@@ -253,6 +277,7 @@ final class AppLocker {
             self.unlockedAt[b] = Date()
             self.hadWindow.remove(b)
             self.observe(app, b)
+            self.reschedule()
             Log.info("app lock: unlocked \(b)")
             app.unhide()
             app.activate()

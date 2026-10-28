@@ -25,12 +25,28 @@ final class NotificationWatcher {
     /// App names (as shown in banners) → bundle ID, for apps whose banners get covered locally.
     var coverApps: [String: String] = [:]
 
+    /// Runs only while something needs it (capturing, or hiding locked apps' previews): twice a
+    /// second normally, ten times a second while Notification Center is showing something.
+    var needed = false { didSet { if needed != oldValue { needed ? start() : stop() } } }
+    private var fast = false
+
     func start() {
         guard timer == nil else { return }
-        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in self?.poll() }
+        schedule(interval: 0.5)
+    }
+
+    private func schedule(interval: TimeInterval) {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in self?.poll() }
+        timer?.tolerance = interval * 0.2   // let macOS coalesce wake-ups
+        fast = interval < 0.5
     }
 
     func stop() { timer?.invalidate(); timer = nil; banners = []; updateCovers() }
+
+    private func adjustRate(showing: Bool) {
+        if showing && !fast { schedule(interval: 0.1) } else if !showing && fast { schedule(interval: 0.5) }
+    }
 
     private static let ncBundle = "com.apple.notificationcenterui"
 
@@ -43,7 +59,9 @@ final class NotificationWatcher {
 
     private func poll() {
         let fresh: [Banner]
-        if ncHasOverlayWindow() {
+        let showing = ncHasOverlayWindow()
+        adjustRate(showing: showing)
+        if showing {
             if AXIsProcessTrusted(), let nc = NSRunningApplication.runningApplications(withBundleIdentifier: NotificationWatcher.ncBundle).first {
                 fresh = NotificationWatcher.readBanners(pid: nc.processIdentifier)
                 unreadable = false

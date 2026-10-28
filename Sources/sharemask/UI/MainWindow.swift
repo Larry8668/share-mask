@@ -22,25 +22,28 @@ struct StatusOrb: View {
 
     var body: some View {
         ZStack {
-            ForEach(0..<2) { i in
-                Circle()
-                    .stroke(color.opacity(active ? 0.45 : 0.18), lineWidth: 2)
-                    .scaleEffect(pulse ? 1.35 + CGFloat(i) * 0.25 : 0.9)
-                    .opacity(pulse ? 0 : 1)
-                    .animation(.easeOut(duration: active ? 1.6 : 3.2).repeatForever(autoreverses: false).delay(Double(i) * 0.5), value: pulse)
+            // Pulse rings only while sharing: a repeat-forever animation redraws every frame, which
+            // costs real CPU (and battery) — measured ~39% of a core when it also ran in standby.
+            if active {
+                ForEach(0..<2) { i in
+                    Circle()
+                        .stroke(color.opacity(0.45), lineWidth: 2)
+                        .scaleEffect(pulse ? 1.35 + CGFloat(i) * 0.25 : 0.9)
+                        .opacity(pulse ? 0 : 1)
+                        .animation(.easeOut(duration: 1.8).repeatForever(autoreverses: false).delay(Double(i) * 0.6), value: pulse)
+                }
             }
             Circle()
                 .fill(RadialGradient(colors: [color.opacity(0.95), color.opacity(0.55)], center: .topLeading, startRadius: 4, endRadius: size))
                 .shadow(color: color.opacity(0.6), radius: active ? 18 : 6)
-                .scaleEffect(active ? 1 : (pulse ? 0.97 : 1.0))
-                .animation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true), value: pulse)
             Image(systemName: phase == .panic ? "eye.slash.circle.fill" : "eye.slash.fill")
                 .font(.system(size: size * 0.36, weight: .semibold))
                 .foregroundStyle(.white)
                 .contentTransition(.symbolEffect(.replace))
         }
         .frame(width: size, height: size)
-        .onAppear { pulse = true }
+        .onAppear { pulse = active }
+        .onChange(of: active) { _, now in pulse = now }
         .animation(.spring(response: 0.5, dampingFraction: 0.7), value: phase)
     }
 }
@@ -283,7 +286,6 @@ struct MainView: View {
                             if model.presentingTo == s.id {
                                 HStack {
                                     Image(systemName: "dot.radiowaves.left.and.right").foregroundStyle(.green)
-                                        .symbolEffect(.variableColor.iterative)
                                     Text(model.presentingMirror ? "Mirroring, masked" : "Extended, masked").font(.system(size: 11))
                                     Spacer()
                                     Button("Stop", action: model.actions.stopPresenting).controlSize(.small)
@@ -320,7 +322,6 @@ struct MainView: View {
     private func emptyState(_ title: String, _ text: String, _ symbol: String) -> some View {
         VStack(spacing: 6) {
             Image(systemName: symbol).font(.system(size: 28, weight: .light)).foregroundStyle(.tertiary)
-                .symbolEffect(.pulse, options: .repeating)
             Text(title).font(.system(size: 12, weight: .semibold))
             Text(text).font(.system(size: 11)).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
@@ -350,9 +351,12 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     let model: AppModel
     private var window: NSWindow?
     init(model: AppModel) { self.model = model }
+    /// Called right before showing, so the (otherwise paused) model is current.
+    var onWillShow: (() -> Void)?
     var isVisible: Bool { window?.isVisible ?? false }
 
     func show() {
+        onWillShow?()
         if window == nil {
             let host = NSHostingController(rootView: MainView(model: model))
             let w = NSWindow(contentViewController: host)
@@ -360,7 +364,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
             w.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
             w.titlebarAppearsTransparent = true
             w.titleVisibility = .hidden
-            w.isMovableByWindowBackground = true
+            // Not movable by background: SwiftUI then recomputes drag regions on every frame.
+            w.isMovableByWindowBackground = false
             w.isReleasedWhenClosed = false
             w.delegate = self
             w.setContentSize(NSSize(width: 820, height: 470))
@@ -375,6 +380,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         Log.info("main window closed")
+        // Free the SwiftUI view so nothing keeps updating or animating while it's closed.
+        DispatchQueue.main.async { self.window?.contentViewController = nil; self.window = nil }
         DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) }
     }
 
