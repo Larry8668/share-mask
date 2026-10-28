@@ -49,6 +49,9 @@ struct ResolveOptions: Equatable {
     var disabled: Set<String> = []
     /// Apps masked whole-window regardless of presets (App lock's list), unless revealed.
     var forceMasked: Set<String> = []
+    /// Notification banner frames (global points) read via Accessibility. When set, only these are
+    /// masked instead of Notification Center's whole (full-screen) window.
+    var notificationBanners: [CGRect]? = nil
 }
 
 /// Pure function: presets × window geometry → pixel rects for this frame.
@@ -154,10 +157,21 @@ enum RegionResolver {
         //    occlusion (they are above everything). Large windows (the opened panel) are skipped
         //    only if they'd cover more than a third of the display — they then get masked too.
         if presets.maskNotifications && !options.disabled.contains(notificationCenterBundleID) {
-            for w in windows where w.bundleID == notificationCenterBundleID && w.alpha > 0 {
-                let r = w.boundsPoints.intersection(display.boundsPoints)
-                guard !r.isNull, r.width > 8, r.height > 8 else { continue }
-                emit([r], unoccluded: r, mode: .solid(color: .black))
+            let ncShowing = windows.contains { $0.bundleID == notificationCenterBundleID && $0.alpha > 0 }
+            // Empty list while Notification Center shows something = not read yet → fail closed below.
+            if let banners = options.notificationBanners, !banners.isEmpty, ncShowing {
+                for b in banners {
+                    let r = b.insetBy(dx: -4, dy: -4).intersection(display.boundsPoints)
+                    guard !r.isNull, r.width > 8, r.height > 8 else { continue }
+                    emit([r], unoccluded: r, mode: .solid(color: .black))
+                }
+            } else {
+                // Banners unknown (no Accessibility): fail closed — the whole Notification Center window.
+                for w in windows where w.bundleID == notificationCenterBundleID && w.alpha > 0 {
+                    let r = w.boundsPoints.intersection(display.boundsPoints)
+                    guard !r.isNull, r.width > 8, r.height > 8 else { continue }
+                    emit([r], unoccluded: r, mode: .solid(color: .black))
+                }
             }
         }
 

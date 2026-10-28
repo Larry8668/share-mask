@@ -70,6 +70,8 @@ Measured on an M-series MacBook at 2940×1912 (macOS 27.0.1): capture→present 
 pipeline 2.6 ms, GPU 1.3–1.5 ms. The fps figure follows screen activity: ScreenCaptureKit only
 delivers frames when content changes, so a static desktop reads ~8–10 fps and rises to 60 under motion.
 
+Battery and CPU use are covered in [Performance](PERFORMANCE.md).
+
 ## Source layout
 
 ```

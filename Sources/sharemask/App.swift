@@ -1,4 +1,5 @@
 import AppKit
+import CGSPrivate
 import UniformTypeIdentifiers
 import ApplicationServices
 import Carbon
@@ -103,6 +104,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let updates = UpdateChecker()
     private let keysPanel = KeysPanel()
     private let welcome = WelcomeWindow()
+    private let notifications = NotificationWatcher()
+    private var menuNeedsFullRefresh = true
+
+    /// Notification banners only matter while capturing (share masks) or when locked apps'
+    /// previews are hidden; otherwise the watcher doesn't run at all.
+    private func updateNotificationWatcherNeed() {
+        let capturing = pipeline.map { $0.state == .running || $0.state == .starting } ?? false
+        let covering = locker.isActive && locker.config.hidesNotifications
+        notifications.needed = capturing || covering
+    }
     private var isNewUser = false
     let model = AppModel()
     private lazy var mainWindow = MainWindowController(model: model)
@@ -118,6 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var effectiveOptions: ResolveOptions {
         var o = options
         if locker.isActive { o.forceMasked = Set(locker.config.apps) }
+        if !notifications.unreadable { o.notificationBanners = notifications.banners.map { $0.frame } }
         return o
     }
     private var refreshTimer: Timer?
@@ -151,6 +163,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // App lock first: a relaunch after a force-quit must re-hide locked apps immediately.
         locker.onChange = { [weak self] in self?.syncLockState() }
         locker.start()
+        notifications.onChange = { [weak self] _ in
+            guard let self = self else { return }
+            self.pipeline?.options = self.effectiveOptions
+        }
+        syncNotificationCovers()
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
             if let a = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, a.bundleIdentifier != Bundle.main.bundleIdentifier { self?.lastOtherFront = a }
         }
@@ -200,7 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             toggleUpdateChecks: { [weak self] in self?.updates.enabled.toggle(); self?.refreshMenu() },
             removeDisplay: { [weak self] in self?.bringBackStrays(forceRemove: true) },
             quit: { NSApp.terminate(nil) }))
-        menuBar.onMenuWillOpen = { [weak self] in self?.refreshMenu(); self?.refreshAppMenus() }
+        menuBar.onMenuWillOpen = { [weak self] in self?.menuNeedsFullRefresh = true; self?.refreshMenu(); self?.refreshAppMenus() }
 
         updates.onChange = { [weak self] in self?.refreshMenu() }
         updates.start()
@@ -269,7 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         welcome.onOpenMenu = { [weak self] in self?.menuBar.openMenu() }
         welcome.onFinished = { [weak self] in self?.mainWindow.show() }
         wireModelActions()
-        updateModel()
+        mainWindow.onWillShow = { [weak self] in self?.updateModel() }
         welcome.onRelaunch = { [weak self] in self?.relaunch() }
         if CommandLine.arguments.contains("--show-main") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.mainWindow.show() }
@@ -302,6 +319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         runTestHooks()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.checkStrays(); self?.refreshMenu() }
+        refreshTimer?.tolerance = 0.3
         refreshMenu()
         if ProcessInfo.processInfo.environment["SHAREMASK_DUMP_WINDOWS"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.dumpWindows() }
@@ -633,12 +651,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if p.state.isRunning, let m = meetings { latency += "\n" + m.statusText }
         }
 
-        updateModel()
-        menuBar.updateAppLock(appLockModel())
-        menuBar.updatePresent(AppDelegate.externalScreens(), active: pipeline?.output ?? .proxy)
-        menuBar.updateScreens(AppDelegate.shareableScreens(), selected: pipeline?.source.id ?? CGMainDisplayID())
-        menuBar.updateVersion(current: UpdateChecker.currentVersion, status: updates.status,
-                              checksEnabled: updates.enabled, homebrew: UpdateChecker.installedWithHomebrew)
+        // The window's data and the submenus are only rebuilt when someone can see them (menu being
+        // opened, window visible); the once-a-second timer otherwise only updates icon + status.
+        updateNotificationWatcherNeed()
+        if mainWindow.isVisible { updateModel() }
+        if menuNeedsFullRefresh {
+            menuNeedsFullRefresh = false
+            menuBar.updateAppLock(appLockModel())
+            menuBar.updatePresent(AppDelegate.externalScreens(), active: pipeline?.output ?? .proxy)
+            menuBar.updateScreens(AppDelegate.shareableScreens(), selected: pipeline?.source.id ?? CGMainDisplayID())
+            menuBar.updateVersion(current: UpdateChecker.currentVersion, status: updates.status,
+                                  checksEnabled: updates.enabled, homebrew: UpdateChecker.installedWithHomebrew)
+        }
         menuBar.update(status: status, latency: latency, warning: warning, running: running, panic: panic,
                        regionsEnabled: regions, pointerGuard: pointerGuardEnabled, hud: hudEnabled,
                        hotkeys: config.config.hotkeys, needsPermission: permissionMissing,
@@ -690,6 +714,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         a.toggleLockApp = { [weak self] b in self?.appLockCommand("app", b) }
         a.setCloseDelay = { [weak self] v in self?.appLockCommand("closeRelock", "\(v)") }
         a.lockNow = { [weak self] b in self?.locker.lockNow(b) }
+        a.toggleHideNotifications = { [weak self] in self?.appLockCommand("hideNotifs", nil) }
         a.chooseAppToLock = { [weak self] in
             let panel = NSOpenPanel()
             panel.title = "Choose an app to lock"
@@ -754,6 +779,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let lm = appLockModel()
         if m.lockOn != lm.enabled { m.lockOn = lm.enabled }
         if m.lockCloseDelay != locker.config.closeDelay { m.lockCloseDelay = locker.config.closeDelay }
+        if m.lockHidesNotifications != locker.config.hidesNotifications { m.lockHidesNotifications = locker.config.hidesNotifications }
         let locks = lm.apps.map { AppModel.AppItem(id: $0.bundleID, name: $0.name, on: $0.locked, detail: $0.unlockedNow ? "unlocked" : "") }
         if m.lockApps != locks { m.lockApps = locks }
         let screens = AppDelegate.externalScreens().map { AppModel.Screen(id: $0.id, name: $0.name) }
@@ -773,9 +799,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var upd: String?
         if case .available(let v) = updates.status { upd = v }
         if m.updateAvailable != upd { m.updateAvailable = upd }
+        if CommandLine.arguments.contains("--demo-model") { applyDemoModel(); return }   // README screenshots
         if m.keys.isEmpty {
             m.keys = [("⌃⌥B", "panic"), ("⌃⌥R", "hold to reveal"), ("⌃⌥M", "masks on/off"), ("⌃⇧⌘L", "lock apps")]
         }
+    }
+
+    /// Made-up content for the README screenshot (never shown in normal use).
+    private func applyDemoModel() {
+        let m = model
+        m.phase = .live; m.title = "Live"; m.subtitle = "In your call, share the screen called “sharemask”."
+        m.latency = "60 fps · 6 ms"; m.regionsOn = true
+        m.maskApps = [.init(id: "net.whatsapp.WhatsApp", name: "WhatsApp", on: true, detail: "2 regions"),
+                      .init(id: "com.tinyspeck.slackmacgap", name: "Slack", on: true, detail: "1 region"),
+                      .init(id: "com.apple.MobileSMS", name: "Messages", on: true, detail: "1 region")]
+        m.lockOn = true
+        m.lockApps = [.init(id: "com.apple.Photos", name: "Photos", on: true, detail: ""),
+                      .init(id: "com.apple.Notes", name: "Notes", on: true, detail: "unlocked"),
+                      .init(id: "com.apple.MobileSMS", name: "Messages", on: true, detail: "")]
+        m.screens = [.init(id: 99, name: "Living Room TV (AirPlay)")]
+        m.presentingTo = nil
+        m.version = UpdateChecker.currentVersion
+        m.keys = [("⌃⌥B", "panic"), ("⌃⌥R", "hold to reveal"), ("⌃⌥M", "masks on/off"), ("⌃⇧⌘L", "lock apps")]
     }
 
     /// Opened by the user (Finder, Launchpad, Dock) → show the window. Not at login, not when
@@ -800,7 +845,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func syncLockState() {
         pipeline?.options = effectiveOptions
+        syncNotificationCovers()
         refreshMenu()
+    }
+
+    /// Which banners to cover on the user's own screen: those of apps that are locked right now,
+    /// matched by the app name Notification Center shows. Off unless App lock ▸ Hide notification previews.
+    private func syncNotificationCovers() {
+        guard locker.isActive, locker.config.hidesNotifications else { notifications.coverApps = [:]; return }
+        var map: [String: String] = [:]
+        for b in locker.config.apps where locker.isLocked(b) {
+            let running = NSRunningApplication.runningApplications(withBundleIdentifier: b).first?.localizedName
+            let bundleName = NSWorkspace.shared.urlForApplication(withBundleIdentifier: b).flatMap { Bundle(url: $0) }
+            for n in [running, bundleName?.infoDictionary?["CFBundleDisplayName"] as? String, bundleName?.infoDictionary?["CFBundleName"] as? String].compactMap({ $0 }) {
+                map[n] = b
+            }
+        }
+        notifications.coverApps = map
     }
 
     /// If App lock wants the keep-alive agent and this instance wasn't started by it, start the
@@ -838,7 +899,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: b).flatMap { Bundle(url: $0)?.infoDictionary?["CFBundleName"] as? String } ?? b
             return (b, name, c.apps.contains(b), unlockedNow.contains(b))
         }.sorted { ($0.locked ? 0 : 1, $0.name.lowercased()) < ($1.locked ? 0 : 1, $1.name.lowercased()) }
-        return .init(enabled: c.enabled, apps: apps, relockMinutes: c.relockMinutes, closeDelay: c.closeDelay, relockOnSleep: c.relockOnSleep,
+        return .init(enabled: c.enabled, apps: apps, relockMinutes: c.relockMinutes, closeDelay: c.closeDelay,
+                     hideNotifications: c.hidesNotifications, relockOnSleep: c.relockOnSleep,
                      guardQuit: c.guardQuit, keepAlive: c.keepAlive, hasPassword: c.passwordHash != nil)
     }
 
@@ -876,6 +938,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let m = Int(arg ?? "5") ?? 5
             if m < locker.config.relockMinutes || !locker.isActive { locker.update { $0.relockMinutes = m } }
             else { change { [weak self] in self?.locker.update { $0.relockMinutes = m } } }
+        case "hideNotifs":
+            if !locker.config.hidesNotifications { locker.update { $0.hideNotifications = true } }
+            else { change { [weak self] in self?.locker.update { $0.hideNotifications = false } } }
         case "closeRelock":
             let v = Int(arg ?? "0") ?? 0
             let cur = locker.config.closeDelay
@@ -1153,6 +1218,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         case "delay-30": locker.update { $0.closeRelockSeconds = 30 }
         case "delay-instant": locker.update { $0.closeRelockSeconds = 0 }
+        case "lock-notif-test":   // test: lock Script Editor (osascript's notifications) with previews hidden
+            locker.update { $0.enabled = true; $0.apps = ["com.apple.ScriptEditor2"]; $0.keepAlive = false; $0.hideNotifications = true }
+        case "snap-banner":       // test: screenshot of the screen area of the first banner (what the user sees)
+            guard let b = notifications.banners.first else { Log.error("snap-banner: no banner"); break }
+            let path = (ProcessInfo.processInfo.environment["SHAREMASK_SNAP_DIR"] ?? NSTemporaryDirectory()) + "/banner.png"
+            if #available(macOS 15.2, *) {
+                SCScreenshotManager.captureImage(in: b.frame.insetBy(dx: -10, dy: -10)) { img, err in
+                    guard let img = img else { Log.error("snap-banner failed: \(String(describing: err))"); return }
+                    try? NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                    Log.info("snap-banner written to \(path)")
+                }
+            }
+        case "dump-overlays":   // research: every non-normal-layer window right now
+            var cache: [pid_t: String?] = [:]
+            for w in WindowTracker.copyOnScreenWindows(bundleCache: &cache) where w.layer != 0 {
+                let owner = NSRunningApplication(processIdentifier: w.pid)?.localizedName ?? "pid \(w.pid)"
+                Log.info("overlay win \(w.windowID) owner=\(owner) bundle=\(w.bundleID ?? "?") layer=\(w.layer) bounds=\(Int(w.boundsPoints.minX)),\(Int(w.boundsPoints.minY)) \(Int(w.boundsPoints.width))x\(Int(w.boundsPoints.height)) title=\(w.title ?? "")")
+            }
+        case "dump-nc":   // research: what can we see of notification banners?
+            var cache: [pid_t: String?] = [:]
+            for w in WindowTracker.copyOnScreenWindows(bundleCache: &cache) where w.bundleID == RegionResolver.notificationCenterBundleID {
+                Log.info("nc window \(w.windowID) layer=\(w.layer) bounds=\(w.boundsPoints) title=\(w.title ?? "")")
+            }
+            if let nc = NSRunningApplication.runningApplications(withBundleIdentifier: RegionResolver.notificationCenterBundleID).first {
+                func dump(_ el: AXUIElement, _ depth: Int) {
+                    guard depth < 9 else { return }
+                    func attr(_ a: String) -> String? {
+                        var v: CFTypeRef?
+                        guard AXUIElementCopyAttributeValue(el, a as CFString, &v) == .success, let x = v else { return nil }
+                        if let str = x as? String { return str.isEmpty ? nil : str }
+                        return nil
+                    }
+                    let role = attr(kAXRoleAttribute) ?? "?"
+                    if role == "AXMenuBar" { return }
+                    var posV: CFTypeRef?, sizeV: CFTypeRef?
+                    var frame = ""
+                    if AXUIElementCopyAttributeValue(el, kAXPositionAttribute as CFString, &posV) == .success,
+                       AXUIElementCopyAttributeValue(el, kAXSizeAttribute as CFString, &sizeV) == .success {
+                        var p = CGPoint.zero, sz = CGSize.zero
+                        AXValueGetValue(posV as! AXValue, .cgPoint, &p); AXValueGetValue(sizeV as! AXValue, .cgSize, &sz)
+                        frame = " @\(Int(p.x)),\(Int(p.y)) \(Int(sz.width))x\(Int(sz.height))"
+                    }
+                    let bits = [attr(kAXTitleAttribute).map { "title=\($0)" }, attr(kAXValueAttribute).map { "value=\($0)" },
+                                attr(kAXDescriptionAttribute).map { "desc=\($0)" }, attr(kAXIdentifierAttribute).map { "id=\($0)" },
+                                attr(kAXSubroleAttribute).map { "sub=\($0)" }].compactMap { $0 }.joined(separator: " ")
+                    Log.info("nc ax " + String(repeating: "  ", count: depth) + role + frame + " " + bits)
+                    var kids: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &kids) == .success, let k = kids as? [AXUIElement] {
+                        for c in k { dump(c, depth + 1) }
+                    }
+                }
+                dump(AXUIElementCreateApplication(nc.processIdentifier), 0)
+            }
+        case "desktop-check":
+            for b in [AppDelegate.testAppID, "net.whatsapp.WhatsApp"] {
+                if let a = NSRunningApplication.runningApplications(withBundleIdentifier: b).first {
+                    Log.info("script: \(b) on another desktop = \(locker.isOnAnotherDesktop(a)) (active desktop \(SMActiveSpace()))")
+                }
+            }
+        case "fullscreen-away-back":   // the reported case: app on its own desktop, user swipes away and back
+            guard let te = NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first else { break }
+            te.activate()
+            var v: CFTypeRef?
+            AXUIElementCopyAttributeValue(AXUIElementCreateApplication(te.processIdentifier), kAXWindowsAttribute as CFString, &v)
+            guard let w = (v as? [AXUIElement])?.first else { break }
+            AXUIElementSetAttributeValue(w, "AXFullScreen" as CFString, kCFBooleanTrue)
+            Log.info("script: test app → full screen (own desktop)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first?.activate(options: .activateAllWindows)
+                Log.info("script: switched away to Finder's desktop")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.scriptAction("desktop-check") }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                    te.activate()
+                    Log.info("script: back to the test app's desktop")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                        AXUIElementSetAttributeValue(w, "AXFullScreen" as CFString, kCFBooleanFalse)
+                        Log.info("script: test app out of full screen")
+                    }
+                }
+            }
         case "close-reopen-frontmost":   // the real case: app stays frontmost, window closed, reopened from the Dock
             NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first?.activate()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {

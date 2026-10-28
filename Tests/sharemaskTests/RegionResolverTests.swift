@@ -270,3 +270,29 @@ final class DisplayLayoutTests: XCTestCase {
         XCTAssertFalse(DisplayLayout.isWellPlaced(CGRect(x: 1470, y: 0, width: 100, height: 100), real: [builtin]))
     }
 }
+
+final class NotificationMaskTests: XCTestCase {
+    let display = DisplayGeometry(boundsPoints: CGRect(x: 0, y: 0, width: 1470, height: 956), scale: 1, pixelSize: CGSize(width: 1470, height: 956))
+    // macOS 27: Notification Center's window covers the whole screen while a banner shows.
+    let nc = TrackedWindow(windowID: 24, pid: 9, bundleID: RegionResolver.notificationCenterBundleID,
+                           boundsPoints: CGRect(x: 0, y: 0, width: 1470, height: 956), layer: 21, alpha: 1, sharingState: 1)
+    func testOnlyBannersMaskedWhenKnown() {
+        var o = ResolveOptions(); o.notificationBanners = [CGRect(x: 1110, y: 49, width: 344, height: 75)]
+        let out = RegionResolver.resolve(presets: .empty, windows: [nc], display: display, frontmostBundleID: nil, options: o)
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].rect.width, 344 + 8, accuracy: 1)      // banner + 4 pt margin each side
+        XCTAssertLessThan(out[0].rect.width * out[0].rect.height, 1470 * 956 / 10)
+    }
+    func testWholeWindowWhenBannersUnknownOrNotYetRead() {
+        for banners in [nil, [] as [CGRect]] {
+            var o = ResolveOptions(); o.notificationBanners = banners
+            let out = RegionResolver.resolve(presets: .empty, windows: [nc], display: display, frontmostBundleID: nil, options: o)
+            XCTAssertEqual(out.count, 1)
+            XCTAssertEqual(out[0].rect.width, 1470)
+        }
+    }
+    func testNothingWhenNotificationCenterIdle() {
+        var o = ResolveOptions(); o.notificationBanners = [CGRect(x: 1110, y: 49, width: 344, height: 75)]
+        XCTAssertTrue(RegionResolver.resolve(presets: .empty, windows: [], display: display, frontmostBundleID: nil, options: o).isEmpty)
+    }
+}

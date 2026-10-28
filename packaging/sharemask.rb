@@ -9,12 +9,12 @@
 # updates) but is not notarised, so Gatekeeper would refuse the quarantined download. The
 # postflight below removes the quarantine attribute (Homebrew 7 dropped --no-quarantine).
 cask "sharemask" do
-  version "0.2.4"
-  sha256 "80f4b1eb6c50b7ef99db227c779326f6cb00c4c608e212178bfc591c1c5bbce8"
+  version "0.2.5"
+  sha256 "33a1e8cd27d0146ce0d5ed09b72e5d2cd29cccd7297e33fbb8f7e26a2a7d31d7"
 
   url "https://github.com/Larry8668/share-mask/releases/download/v#{version}/sharemask-#{version}.zip"
   name "sharemask"
-  desc "Share your screen with chosen app regions pixellated only on the shared feed"
+  desc "Blur chosen apps in screen shares and lock apps behind Touch ID"
   homepage "https://github.com/Larry8668/share-mask"
 
   depends_on macos: :sonoma

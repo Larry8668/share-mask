@@ -213,6 +213,8 @@ final class Pipeline {
             let pr = Presenter(device: device, context: redactor.context, virtualDisplayID: tv, transparent: overlay)
             presenter = pr
             _ = pr.attachToScreen()
+            tracker.start()
+            startRerenderTimer(); startWatchdog()
             Log.info("presenting on screen \(tv) (\(overlay ? "masked extend overlay" : "masked mirror"))")
             onDisplayChange?(true)
             return true
@@ -229,6 +231,8 @@ final class Pipeline {
             let pr = Presenter(device: device, context: redactor.context, virtualDisplayID: vd.displayID)
             presenter = pr
             _ = pr.attachToScreen()
+            tracker.start()   // window geometry is only needed while there's something to mask
+            startRerenderTimer(); startWatchdog()
             Log.info("proxy display \(vd.displayID) created on demand (\(displaySpec.modeWidth)x\(displaySpec.modeHeight))")
             onDisplayChange?(true)
             return true
@@ -290,6 +294,9 @@ final class Pipeline {
     /// the real display). Main thread.
     func tearDownDisplay() {
         dispatchPrecondition(condition: .onQueue(.main))
+        tracker.stop()
+        rerenderTimer?.cancel(); rerenderTimer = nil
+        watchdog?.cancel(); watchdog = nil
         if output.tv != nil, presenter != nil {
             presenter?.close()
             presenter = nil
@@ -334,10 +341,8 @@ final class Pipeline {
         dispatchPrecondition(condition: .onQueue(.main))
         guard state != .running, state != .starting else { return }
         state = .starting
-        tracker.start()
         installReconfigurationCallback()
-        startRerenderTimer()
-        startWatchdog()
+        // (re-render timer and watchdog start with the display, see bringUpDisplay)
         if captureWanted {
             Task { await startCapture() }
         } else {
