@@ -9,8 +9,8 @@
 # updates) but is not notarised, so Gatekeeper would refuse the quarantined download. The
 # postflight below removes the quarantine attribute (Homebrew 7 dropped --no-quarantine).
 cask "sharemask" do
-  version "0.2.0"
-  sha256 "db22a33ec8ff03c31ce53a198bfadfcf53a1e54ac5bd37545c3ab6ffb5749084"
+  version "0.2.1"
+  sha256 "af53f564a1ec282ce2499d274d7ad1e57bfa3f8be945d7c440b0e45552d38083"
 
   url "https://github.com/Larry8668/share-mask/releases/download/v#{version}/sharemask-#{version}.zip"
   name "sharemask"
@@ -38,10 +38,8 @@ cask "sharemask" do
   end
 
   caveats <<~EOS
-    sharemask is not notarised; the quarantine flag was removed so it opens normally. If macOS
-    still refuses, right-click the app and choose Open once. On first launch grant Screen Recording
-    in System Settings → Privacy & Security → Screen & System Audio Recording.
-    After `brew upgrade`, open sharemask once (sharemask's own "Update now" relaunches it for you).
+    Open sharemask, then look for the crossed eye (⊘) in your menu bar; a welcome window walks you
+    through the two permissions. After `brew upgrade`, open it once more (or use Update now in its menu).
   EOS
 
   # App lock's optional keep-alive agent. On uninstall it's unloaded and set aside (no sudo); on an

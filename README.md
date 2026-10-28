@@ -45,6 +45,9 @@ Applications, then right-click → Open the first time (the app is signed but no
 
 **From source**: `make identity && make run` (see Build below).
 
+On first launch a **welcome window** points at the menu-bar icon (a crossed eye) and has one-click
+buttons for the two permissions. Reopen it any time: Settings ▸ Setup & permissions…
+
 First launch: grant **Screen Recording** when asked (System Settings → Privacy & Security → Screen &
 System Audio Recording), then relaunch if macOS asks you to. The app lives in the menu bar as a
 crossed-eye icon; in your call app, share the display named **sharemask**.

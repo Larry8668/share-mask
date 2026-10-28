@@ -93,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let recorder = HotkeyRecorder()
     private let updates = UpdateChecker()
     private let keysPanel = KeysPanel()
+    private let welcome = WelcomeWindow()
     private var sessionKeysOn = false
     private var shownKeysThisLaunch = false
     private var knownExternals: Set<String> = []
@@ -167,6 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             bringBackStrays: { [weak self] in self?.bringBackStrays() },
             chooseScreen: { [weak self] id in self?.chooseScreen(id) },
             appLock: { [weak self] c, arg in self?.appLockCommand(c, arg) },
+            showWelcome: { [weak self] in self?.welcome.show() },
             present: { [weak self] tv, mirror in self?.present(tv: tv, mirror: mirror) },
             stopPresenting: { [weak self] in self?.stopPresenting() },
             showKeys: { [weak self] in self?.keysPanel.show(on: self?.launch.source.id ?? CGMainDisplayID()) },
@@ -247,6 +249,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         knownExternals = Set(AppDelegate.externalScreens().map { AppDelegate.screenKey($0.id) })
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self?.screensChanged() }
+        }
+        welcome.onOpenMenu = { [weak self] in self?.menuBar.openMenu() }
+        welcome.onRelaunch = { [weak self] in self?.relaunch() }
+        if WelcomeWindow.shouldShowAutomatically || CommandLine.arguments.contains("--welcome") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.welcome.show() }
+        }
+        if let i = CommandLine.arguments.firstIndex(of: "--snapshot-welcome"), i + 1 < CommandLine.arguments.count {
+            let path = CommandLine.arguments[i + 1]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.welcome.snapshot(to: path) }
         }
         runTestHooks()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.checkStrays(); self?.refreshMenu() }

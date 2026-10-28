@@ -29,6 +29,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         var bringBackStrays: () -> Void
         var chooseScreen: (CGDirectDisplayID) -> Void
         var appLock: (String, String?) -> Void      // (command, argument)
+        var showWelcome: () -> Void
         var present: (CGDirectDisplayID, Bool) -> Void   // (tv, mirror?)
         var stopPresenting: () -> Void
         var showKeys: () -> Void
@@ -170,6 +171,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
         let settings = NSMenu()
         hotkeysItem.title = "Shortcuts"
         hotkeysItem.submenu = NSMenu()
+        settings.addItem(item("Setup & permissions…", #selector(showWelcome)))
+        settings.addItem(.separator())
         settings.addItem(hotkeysItem)
         settings.addItem(loginItem)
         settings.addItem(pointerItem)
@@ -500,6 +503,11 @@ final class MenuBar: NSObject, NSMenuDelegate {
         menu.addItem(cmd(m.hasPassword ? "Change sharemask password…" : "Set a sharemask password…", "password"))
         if m.hasPassword { menu.addItem(cmd("Remove sharemask password…", "removePassword")) }
     }
+
+    @objc private func showWelcome() { actions.showWelcome() }
+
+    /// Opens the status item's menu (for "Show me the menu" in the welcome window).
+    func openMenu() { item.button?.performClick(nil) }
 
     @objc private func appLockCommand(_ sender: NSMenuItem) {
         guard let pair = sender.representedObject as? [String], pair.count == 2 else { return }

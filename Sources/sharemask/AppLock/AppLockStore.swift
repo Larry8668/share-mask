@@ -19,7 +19,8 @@ struct AppLockConfig: Codable, Equatable {
 enum AppLockStore {
     private static let service = "dev.sharemask.applock"
     /// Tests use a separate Keychain entry so they never touch the user's real App lock settings.
-    private static let account = CommandLine.arguments.contains("--lock-test-store") ? "config-test" : "config"
+    private static let account = (CommandLine.arguments.contains("--lock-test-store")
+        || ProcessInfo.processInfo.environment["SHAREMASK_LOCK_TEST_STORE"] != nil) ? "config-test" : "config"
 
     static func load() -> AppLockConfig {
         let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
