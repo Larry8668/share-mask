@@ -150,17 +150,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let p = Pipeline(source: savedSource() ?? launch.source, tracker: tracker)
         p.config = config.config
         p.captureMode = Pipeline.CaptureMode(rawValue: config.config.captureMode) ?? .ask
-        let mc = MeetingCoordinator(pipeline: p)
+        let mc = MeetingCoordinator(pipeline: p, prompt: alerts)
+        mc.ignoreWatcher = { [weak p] in
+            guard let p = p else { return false }
+            return p.output != .proxy || p.recentlyReconfigured || AppDelegate.airPlayConnected
+        }
+        p.onSourceLost = { [weak self] in
+            UserDefaults.standard.removeObject(forKey: "sourceScreen")
+            Log.info("forgot remembered share screen (it disappeared)")
+            self?.refreshMenu()
+        }
         mc.mode = p.captureMode
         mc.calendarLookahead = config.config.calendarLookahead
         mc.onStatus = { [weak self] _ in self?.refreshMenu() }
         mc.screenChoices = { [weak self] in
-            let screens = AppDelegate.realScreens()
+            let screens = AppDelegate.shareableScreens()
             let sel = screens.firstIndex { $0.id == self?.pipeline?.source.id } ?? 0
             return (screens.map { $0.name }, sel)
         }
         mc.onChooseScreen = { [weak self] i in
-            let screens = AppDelegate.realScreens()
+            let screens = AppDelegate.shareableScreens()
             if i < screens.count { self?.chooseScreen(screens[i].id) }
         }
         meetings = mc
@@ -229,6 +238,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func toggleProxy() {
         guard let p = pipeline else { return }
+        // While presenting to a TV, capture is held on by the output mode itself; "Stop" must end
+        // the presentation (it used to leave it running).
+        if p.output != .proxy { stopPresenting(); return }
         if p.captureMode == .ask || p.captureMode == .auto {
             // Start/Stop means "capture now" / "stop capturing"; the proxy display itself stays.
             if p.state.isRunning || p.state == .starting { meetings?.userStoppedManually() }
@@ -316,10 +328,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func endShare(confirm: Bool) {
         guard let p = pipeline else { return }
         let go = { [weak self] in
+            let wasPresenting = p.output != .proxy
+            self?.meetings?.userStoppedManually()   // don't re-prompt for the same meeting
             p.endShare()
-            self?.alerts.show(title: "Share ended — proxy display removed", detail: "Your call app lost its source display. Relaunch sharemask to create it again.",
-                              primary: "Relaunch", secondary: "Quit", timeout: 120,
-                              onPrimary: { self?.relaunch() }, onSecondary: { NSApp.terminate(nil) })
+            // Back in standby: capture starts again on the next meeting prompt or "Start capturing".
+            self?.alerts.show(title: wasPresenting ? "Presenting stopped" : "Share ended — sharemask is in standby",
+                              detail: wasPresenting ? "The TV no longer shows anything from sharemask."
+                                                    : "The “sharemask” display was removed, so your call app stopped sharing it. Start capturing again any time from the menu.",
+                              primary: "OK", secondary: "Start again", timeout: 10,
+                              onPrimary: {}, onSecondary: { self?.toggleProxy() })
             self?.refreshMenu()
         }
         if confirm {
@@ -477,7 +494,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menuBar.updatePresent(AppDelegate.externalScreens(), active: pipeline?.output ?? .proxy)
-        menuBar.updateScreens(AppDelegate.realScreens(), selected: pipeline?.source.id ?? CGMainDisplayID())
+        menuBar.updateScreens(AppDelegate.shareableScreens(), selected: pipeline?.source.id ?? CGMainDisplayID())
         menuBar.updateVersion(current: UpdateChecker.currentVersion, status: updates.status,
                               checksEnabled: updates.enabled, homebrew: UpdateChecker.installedWithHomebrew)
         menuBar.update(status: status, latency: latency, warning: warning, running: running, panic: panic,
@@ -512,6 +529,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// AirPlay receivers show up as screens named "<device> (AirPlay)". They're presentation
+    /// targets, never a screen you'd mirror into a call.
+    static func isAirPlay(_ id: CGDirectDisplayID) -> Bool {
+        (NSScreen.screens.first { $0.displayID == id }?.localizedName ?? "").range(of: "AirPlay", options: .caseInsensitive) != nil
+    }
+    static var airPlayConnected: Bool { DisplayLayout.realDisplays(excluding: nil).contains(where: isAirPlay) }
+
+    /// Screens offered as "the screen to share": real screens minus AirPlay receivers.
+    static func shareableScreens() -> [(id: CGDirectDisplayID, name: String)] {
+        realScreens().filter { !isAirPlay($0.id) }
+    }
+
     /// Display IDs change across reconnects; remember the screen by vendor/model/serial.
     private static func screenKey(_ id: CGDirectDisplayID) -> String {
         "\(CGDisplayVendorNumber(id)):\(CGDisplayModelNumber(id)):\(CGDisplaySerialNumber(id))"
@@ -519,7 +548,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func savedSource() -> SourceDisplay? {
         guard let key = UserDefaults.standard.string(forKey: "sourceScreen"),
-              let id = AppDelegate.realScreens().first(where: { AppDelegate.screenKey($0.id) == key })?.id else { return nil }
+              let id = AppDelegate.shareableScreens().first(where: { AppDelegate.screenKey($0.id) == key })?.id else { return nil }
         return SourceDisplay.current(id: id)
     }
 
@@ -651,8 +680,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let dir = value("--snapshot-screen") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in self?.snapshotOutputScreen(to: dir) }
         }
+        // --script "3:start,8:end,12:start,16:end" — timed actions for reproducing bug reports.
+        if let script = value("--script") {
+            for step in script.split(separator: ",") {
+                let parts = step.split(separator: ":")
+                guard parts.count == 2, let t = Double(parts[0]) else { continue }
+                let action = String(parts[1])
+                DispatchQueue.main.asyncAfter(deadline: .now() + t) { [weak self] in self?.scriptAction(action) }
+            }
+        }
         if args.contains("--selftest-keys") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.selftestKeys() }
+        }
+    }
+
+    private func scriptAction(_ action: String) {
+        guard let p = pipeline else { return }
+        Log.info("script: \(action)")
+        switch action {
+        case "start": toggleProxy()                       // same as the menu's Start capturing
+        case "stop": toggleProxy()
+        case "end": endShare(confirm: false)              // same as End share now / ⌃⌥X
+        case "present-extend", "present-mirror":
+            if let tv = AppDelegate.externalScreens().first { present(tv: tv.id, mirror: action == "present-mirror") }
+        case "stop-present": stopPresenting()
+        case "source-tv":
+            if let tv = AppDelegate.realScreens().first(where: { CGDisplayIsBuiltin($0.id) == 0 }) { chooseScreen(tv.id) }
+        default: break
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            Log.info("script screens: all=\(AppDelegate.realScreens().map { $0.name }) shareable=\(AppDelegate.shareableScreens().map { $0.name }) airplay=\(AppDelegate.airPlayConnected) ignoreWatcher=\(p.output != .proxy || p.recentlyReconfigured || AppDelegate.airPlayConnected)")
+            Log.info("script state after \(action): state=\(p.state) output=\(p.output) source=\(p.source.id) proxy=\(p.virtualDisplay.map { "\($0.displayID)" } ?? "none") presenter=\(p.presenter != nil) saved=\(UserDefaults.standard.string(forKey: "sourceScreen") ?? "none")")
         }
     }
 

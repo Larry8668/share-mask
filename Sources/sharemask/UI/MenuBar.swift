@@ -136,7 +136,6 @@ final class MenuBar: NSObject, NSMenuDelegate {
         presentItem.isHidden = true
         menu.addItem(presentItem)
         menu.addItem(panicItem)
-        menu.addItem(endShareItem)
         menu.addItem(.separator())
 
         // Masks ▸ (rebuilt on open by updateMasks; the two toggles stay at the top)
@@ -180,6 +179,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
 
         // Troubleshooting ▸
         let trouble = NSMenu()
+        trouble.addItem(endShareItem)
         trouble.addItem(removeDisplayItem)
         trouble.addItem(item("Keyboard shortcuts…", #selector(showKeys)))
         trouble.addItem(item("Show log file", #selector(openLogs)))
@@ -235,7 +235,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         allowlistItem.state = allowlistMode ? .on : .off
         MenuBar.setKey(allowlistItem, hotkeys.allowlist)
         previewItem.state = previewShown ? .on : .off
-        endShareItem.title = "End share now"
+        endShareItem.title = "End share now (emergency, ⌃⌥X)"
         endShareItem.isEnabled = running || displayExists
         MenuBar.setKey(endShareItem, hotkeys.endShare)
         statusLine.title = status
@@ -243,7 +243,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         warningLine.title = warning.map { "⚠ \($0)" } ?? ""
         warningLine.isHidden = warning == nil
         permissionItem.isHidden = !needsPermission
-        startStopItem.title = running ? "Stop capturing" : "Start capturing"
+        startStopItem.title = running ? "Stop" : "Start capturing"
         panicItem.title = panic ? "Panic: ON (restore)" : "Panic"
         panicItem.state = panic ? .on : .off
         MenuBar.setKey(panicItem, hotkeys.panic)
