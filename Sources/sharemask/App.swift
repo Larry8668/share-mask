@@ -1409,7 +1409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "desktop-check":
             for b in [AppDelegate.testAppID, "net.whatsapp.WhatsApp"] {
                 if let a = NSRunningApplication.runningApplications(withBundleIdentifier: b).first {
-                    Log.info("script: \(b) on another desktop = \(locker.isOnAnotherDesktop(a)) (active desktop \(SMActiveSpace()))")
+                    Log.info("script: \(b) on another desktop = \(locker.isOnAnotherDesktop(a)) (shown desktops \(SMCurrentSpaces()))")
                 }
             }
         case "fullscreen-away-back":   // the reported case: app on its own desktop, user swipes away and back
@@ -1449,6 +1449,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             }
+        case "move-to-second":   // test: put the test app's window on the external monitor (own Spaces)
+            guard let te = NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first,
+                  let ext = NSScreen.screens.first(where: { $0 != NSScreen.screens.first }) else { break }
+            let top = NSScreen.screens[0].frame.maxY   // AX uses top-left origin on the primary screen
+            var v: CFTypeRef?
+            AXUIElementCopyAttributeValue(AXUIElementCreateApplication(te.processIdentifier), kAXWindowsAttribute as CFString, &v)
+            for w in (v as? [AXUIElement]) ?? [] {
+                var p = CGPoint(x: ext.frame.minX + 80, y: top - ext.frame.maxY + 80)
+                if let val = AXValueCreate(.cgPoint, &p) { AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, val) }
+            }
+            Log.info("script: test app window → \(ext.localizedName)")
+        case "focus-finder": NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first?.activate()
         case "show-main": mainWindow.show()
         case "close-main": mainWindow.closeForTesting()
         case "relock-test-app": locker.lockNow(AppDelegate.testAppID)

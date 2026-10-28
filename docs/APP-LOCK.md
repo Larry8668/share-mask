@@ -32,6 +32,7 @@ Lock apps on your own screen, so someone using your unlocked Mac can't open them
   opens the editor on its window.
 - **Other desktops**: if you swipe to another desktop (or the app is full screen on its own
   desktop), the app isn't treated as closed; it relocks only when you actually close its window.
+  The same goes for a second monitor: closing an app whose window is on it relocks as usual.
 - **Notification previews** (off by default; App lock ▸ Options ▸ *Hide notification previews*):
   a banner from a locked app is covered on your screen by "WhatsApp — New notification — unlock to
   read". Clicking it opens the app, which then asks for Touch ID. sharemask reads banners through

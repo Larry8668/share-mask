@@ -17,6 +17,9 @@ BOOL SMScreenWatcherPresent(void);
 BOOL SMSpacesAPIAvailable(void);
 /// The active Space id (0 if unavailable).
 uint64_t SMActiveSpace(void);
+/// The Space currently shown on each display (with separate Spaces per display, one per
+/// monitor), plus the active one. Empty if unavailable.
+NSArray<NSNumber *> *SMCurrentSpaces(void);
 /// Space ids a window belongs to (empty if none / unavailable).
 NSArray<NSNumber *> *SMSpacesForWindow(uint32_t windowID);
 
