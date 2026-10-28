@@ -11,7 +11,12 @@ import EventKit
 /// Modes `always` / `manual` only log the signals.
 final class MeetingCoordinator {
     private let detector = MeetingDetector()
-    private let prompt = PromptPanel()
+    /// Shared with the app's own prompts (TV connected, alerts) so two prompts never stack.
+    private let prompt: PromptPanel
+    /// True while the "someone is capturing the screen" signal can't be trusted: an AirPlay screen
+    /// is connected (AirPlay itself is a screen-capture session), we're presenting to a TV, or
+    /// displays changed in the last few seconds.
+    var ignoreWatcher: (() -> Bool)?
     private weak var pipeline: Pipeline?
     private var pollTimer: Timer?
     private var endGrace: DispatchWorkItem?
@@ -31,7 +36,8 @@ final class MeetingCoordinator {
     var onChooseScreen: ((Int) -> Void)?
     private(set) var statusText = "no meeting detected"
 
-    init(pipeline: Pipeline) {
+    init(pipeline: Pipeline, prompt: PromptPanel) {
+        self.prompt = prompt
         self.pipeline = pipeline
     }
 
@@ -56,7 +62,7 @@ final class MeetingCoordinator {
         guard let p = pipeline else { return }
         let mic = detector.micInUse
         let users = mic ? micUsers : []
-        let watcher = p.someoneElseIsCapturing     // only meaningful while our capture is off
+        let watcher = p.someoneElseIsCapturing && !(ignoreWatcher?() ?? false)   // only meaningful while our capture is off
         let signal = mic || watcher
         let who = users.map { appName($0) }.joined(separator: ", ")
         statusText = signal ? (mic ? "call detected (\(who.isEmpty ? "microphone in use" : who))" : "screen share detected")

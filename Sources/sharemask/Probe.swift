@@ -30,9 +30,11 @@ enum Probe {
                 let size = parseSize(args.popFirst()) ?? (1920, 1080)
                 let mirror = args.first == "--mirror"; if mirror { _ = args.popFirst() }
                 var holdFor = 30.0
+                var tvName = "faketv"
+                if args.first == "--name" { _ = args.popFirst(); tvName = args.popFirst() ?? tvName }
                 if args.first == "--hold" { _ = args.popFirst(); holdFor = Double(args.popFirst() ?? "") ?? 30 }
                 var spec = VirtualDisplay.Spec.forSource(pixelsWide: size.0, pixelsHigh: size.1)
-                spec.name = "faketv"; spec.vendor = 0x1234; spec.product = 0x0002
+                spec.name = tvName; spec.vendor = 0x1234; spec.product = 0x0002
                 do {
                     let tv = try VirtualDisplay.create(spec: spec)
                     print("fake TV \(tv.displayID) \(size.0)x\(size.1) at \(CGDisplayBounds(tv.displayID))")

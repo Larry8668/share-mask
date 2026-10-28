@@ -56,6 +56,7 @@ final class Pipeline {
     func setOutput(_ new: Output) {
         dispatchPrecondition(condition: .onQueue(.main))
         guard new != output else { return }
+        bumpGeneration()
         let wasActive = state == .running || state == .starting
         let cap = capture
         capture = nil
@@ -130,6 +131,18 @@ final class Pipeline {
     private let renderQueue = DispatchQueue(label: "sharemask.render", qos: .userInteractive)
     private var rerenderTimer: DispatchSourceTimer?
     private var restartAttempts = 0
+    /// Bumped whenever the capture "plan" changes (output switch, source switch, stop, end share).
+    /// Delayed retries and watchdog restarts carry the generation they were scheduled in and do
+    /// nothing if it changed: a retry scheduled for a TV that has since gone must not start the
+    /// laptop proxy (seen in every AirPlay session of 0.1.7).
+    private(set) var generation = 0
+    private func bumpGeneration() { generation &+= 1 }
+    /// Last time macOS reconfigured displays (TV/AirPlay connect, resolution change…). Capture
+    /// briefly stalls around these; the watchdog recovers silently instead of alarming the user.
+    private(set) var lastReconfigAt: Double = 0
+    var recentlyReconfigured: Bool { FrameClock.hostSeconds() - lastReconfigAt < 10 }
+    /// Main thread. The shared screen disappeared and sharemask fell back to the main screen.
+    var onSourceLost: (() -> Void)?
     private var idleTimer: DispatchSourceTimer?
 
     enum CaptureMode: String { case ask, auto, always, manual }
@@ -205,6 +218,11 @@ final class Pipeline {
             return true
         }
         if virtualDisplay != nil { return true }
+        if source.geometry.pixelSize.width <= 0 || !DisplayLayout.realDisplays(excluding: nil).contains(source.id) {
+            source = SourceDisplay.current(id: CGMainDisplayID())
+            onSourceLost?()
+            Log.warn("shared screen unavailable at start → using main screen")
+        }
         do {
             let vd = try VirtualDisplay.create(spec: displaySpec)
             virtualDisplay = vd
@@ -226,6 +244,7 @@ final class Pipeline {
     func setSource(_ id: CGDirectDisplayID) {
         let fresh = SourceDisplay.current(id: id)
         guard fresh != source else { return }
+        bumpGeneration()
         Log.info("source screen → \(id) (\(Int(fresh.geometry.pixelSize.width))x\(Int(fresh.geometry.pixelSize.height)))")
         source = fresh
         guard state == .running || state == .starting else { return }
@@ -392,15 +411,20 @@ final class Pipeline {
         let age = FrameClock.hostSeconds() - last
         guard last > 0, age > stallTimeout, !stalled else { return }
         stalled = true
-        Log.error("watchdog: no frames for \(Int(age)) s — blacking out proxy and restarting capture")
+        let quiet = recentlyReconfigured
+        Log.error("watchdog: no frames for \(Int(age)) s — blacking out proxy and restarting capture\(quiet ? " (displays just changed: recovering silently)" : "")")
         presentBlack()
         capture = nil
+        let gen = generation
         Task {
             await cap.stop()
-            await startCapture()
+            let still = await MainActor.run { gen == self.generation && self.captureWanted }
+            if still { await startCapture() } else { Log.info("watchdog restart dropped (plan changed)") }
             await MainActor.run { self.stalled = false }
         }
-        onStall?("Capture stalled for \(Int(age)) s; proxy blacked out and capture restarted")
+        // macOS pauses capture for a few seconds whenever displays reconfigure; that's expected and
+        // recovers on its own, so only a stall with no display change is worth an alert.
+        if !quiet { onStall?("Capture stalled for \(Int(age)) s; proxy blacked out and capture restarted") }
     }
 
     /// Emergency stop: stop capture, black the proxy, and remove the virtual display. Meeting apps
@@ -409,7 +433,26 @@ final class Pipeline {
     func endShare() {
         Log.error("END SHARE requested: stopping capture and removing the virtual display")
         presentBlack()
-        stop()
+        bumpGeneration()
+        if captureMode == .always || captureMode == .manual {
+            stop()          // nothing would restart it anyway; Start brings it back
+            return
+        }
+        // Back to standby (NOT .stopped: a stopped pipeline ignores the meeting gate, so meetings
+        // could never start capture again without a relaunch — the 0.1.7 "proxy died" bug).
+        let cap = capture
+        capture = nil
+        Task { await cap?.stop() }
+        lock.lock(); lastFrame = nil; pending = nil; lock.unlock()
+        meetingActive = false
+        if output != .proxy {
+            presenter?.close(); presenter = nil
+            Mirroring.restore(unmirrored); unmirrored = []
+            if case .overlay = output, let u = userSource { source = u; userSource = nil }
+            output = .proxy
+            onDisplayChange?(false)
+        }
+        enterWaitingForMeeting()
     }
 
     /// Last rendered output (for the preview window).
@@ -475,6 +518,7 @@ final class Pipeline {
     func stop() {
         dispatchPrecondition(condition: .onQueue(.main))
         guard state == .running || state == .starting || state == .waitingForWatcher || isError else { return }
+        bumpGeneration()
         rerenderTimer?.cancel(); rerenderTimer = nil
         idleTimer?.cancel(); idleTimer = nil
         watchdog?.cancel(); watchdog = nil
@@ -493,11 +537,22 @@ final class Pipeline {
     private func handleStreamStopped(_ error: Error?) {
         guard state == .running else { return }
         capture = nil
+        // The captured screen itself is gone (TV unplugged / AirPlay ended): don't retry here; the
+        // screen-change handler stops presenting or falls back to the main screen.
+        if !DisplayLayout.realDisplays(excluding: nil).contains(source.id) {
+            Log.warn("capture stopped because screen \(source.id) disappeared; not retrying")
+            state = .starting
+            return
+        }
         restartAttempts += 1
         let delay = min(10, pow(2.0, Double(restartAttempts - 1)))
+        let gen = generation
         state = .error("capture stopped: \(error.map { "\($0)" } ?? "unknown"); retrying in \(Int(delay)) s")
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            guard let self = self, self.capture == nil, self.isError else { return }
+            guard let self = self, gen == self.generation, self.capture == nil, self.isError, self.captureWanted else {
+                Log.info("capture retry dropped (plan changed)")
+                return
+            }
             self.state = .starting
             Task { await self.startCapture() }
         }
@@ -507,8 +562,14 @@ final class Pipeline {
     /// virtual display is never resized (invariant 2); the presenter letterboxes instead.
 
     func sourceDisplayChanged() {
+        lastReconfigAt = FrameClock.hostSeconds()
+        if output == .proxy, !DisplayLayout.realDisplays(excluding: nil).contains(source.id) {
+            fallBackToMainScreen()
+            return
+        }
         let fresh = SourceDisplay.current(id: source.id)
         guard fresh != source else { return }
+        guard fresh.geometry.pixelSize.width > 0 else { return }   // mid-reconfiguration; wait
         Log.info("source display changed: \(fresh.geometry.pixelSize) scale \(fresh.geometry.scale)")
         source = fresh
         guard state == .running, let cap = capture else { return }
@@ -516,6 +577,26 @@ final class Pipeline {
         Task {
             await cap.stop()
             await startCapture()
+        }
+    }
+
+    /// The screen being shared vanished (e.g. an AirPlay TV chosen as the source): switch to the main
+    /// screen instead of capturing nothing. 0.1.7 kept the vanished screen and then failed every
+    /// start with "zero dimension" until relaunch.
+    private func fallBackToMainScreen() {
+        let main = SourceDisplay.current(id: CGMainDisplayID())
+        Log.warn("shared screen \(source.id) disappeared → falling back to main screen \(main.id)")
+        bumpGeneration()
+        source = main
+        onSourceLost?()
+        guard state == .running || state == .starting || isError else { return }
+        let cap = capture
+        capture = nil
+        tearDownDisplay()
+        Task {
+            await cap?.stop()
+            let want = await MainActor.run { self.captureWanted }
+            if want { await startCapture() } else { await MainActor.run { self.enterWaitingForMeeting() } }
         }
     }
 

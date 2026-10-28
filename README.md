@@ -97,9 +97,9 @@ The menu keeps the essentials on top; everything else is one level down.
 
 | Menu item | Default hotkey | What it does |
 |---|---|---|
-| Start / Stop capturing | | Creates the “sharemask” display and starts capture, or stops and removes it. |
+| Start capturing / Stop | | Starts capture (creating the “sharemask” display), or stops capture or presenting and returns to standby. |
 | Panic | ⌘⇧⌃B | Pixellates the **whole** feed on the next frame (≤ 17 ms). Press again to restore. |
-| End share now | ⌘⇧⌃X | Removes the “sharemask” display, which ends the share in your call app. |
+| End share now (Troubleshooting ▸) | ⌃⌥X, ⌘⇧⌃X | Emergency stop: removes the “sharemask” display (ends the share in your call app) or stops presenting; back to standby, no relaunch needed. |
 | Masks ▸ | ⌘⇧⌃M, ⌘⇧⌃A | Per-app masks on/off, allowlist mode, and ticks for each app, region, rule and notification masking (session only). Hold ⌘⇧⌃R to reveal the frontmost app. |
 | Edit regions ▸ | ⌘⇧⌃P | Region editor for the frontmost app or any running app, configured apps (edit/remove), presets.json. |
 | What others see | | Floating preview of the live proxy output (never captured). |
