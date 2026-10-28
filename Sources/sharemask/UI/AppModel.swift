@@ -22,6 +22,7 @@ final class AppModel: ObservableObject {
     @Published var regionsOn = true
     @Published var maskApps: [AppItem] = []
     @Published var lockOn = false
+    @Published var lockCloseDelay = 0      // seconds; 0 instantly, -1 never
     @Published var lockApps: [AppItem] = []
     @Published var screens: [Screen] = []
     @Published var presentingTo: UInt32?
@@ -41,6 +42,7 @@ final class AppModel: ObservableObject {
         var editRegions: (String) -> Void = { _ in }
         var toggleLock: () -> Void = {}
         var toggleLockApp: (String) -> Void = { _ in }
+        var setCloseDelay: (Int) -> Void = { _ in }
         var present: (UInt32, Bool) -> Void = { _, _ in }
         var stopPresenting: () -> Void = {}
         var askScreen: () -> Void = {}
@@ -51,6 +53,7 @@ final class AppModel: ObservableObject {
         var openMenu: () -> Void = {}
     }
     var actions = Actions()
+    static let closeDelayChoices: [(Int, String)] = [(0, "Instantly"), (30, "After 30 s"), (60, "After 1 min"), (300, "After 5 min"), (-1, "Never")]
 
     static func icon(_ bundleID: String) -> NSImage {
         if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {

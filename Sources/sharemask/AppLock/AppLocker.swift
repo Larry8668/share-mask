@@ -19,7 +19,10 @@ final class AppLocker {
     /// Zero windows must last this long before relocking: while an app un-hides or switches
     /// Spaces, Accessibility can briefly report no windows (seen in testing: a false relock 2.7 s
     /// after unlocking).
-    static let closedDebounce: TimeInterval = 1.5
+    static let closedDebounce: TimeInterval = 0.5
+    /// For a few seconds after unlocking (the app is un-hiding) an empty window list is not trusted.
+    static let unlockGrace: TimeInterval = 3
+    private var unlockedAt: [String: Date] = [:]
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
     var onChange: (() -> Void)?
@@ -116,9 +119,28 @@ final class AppLocker {
         return wins.count   // minimized windows are included, closed ones are gone
     }
 
+    private func inGrace(_ b: String) -> Bool {
+        unlockedAt[b].map { Date().timeIntervalSince($0) < AppLocker.unlockGrace } ?? false
+    }
+
     private func appEvent(_ app: NSRunningApplication, activated: Bool) {
         guard let b = app.bundleIdentifier, isActive, config.apps.contains(b) else { return }
-        if unlocked[b] != nil { if activated { unlocked[b] = Date() }; return }
+        if unlocked[b] != nil {
+            // Reopened after its window was closed: clicking the Dock icon activates the app BEFORE it
+            // draws a new window, so "activated with no windows" means closed-then-reopened. Lock now,
+            // however quickly it was reopened.
+            if activated, hadWindow.contains(b), !inGrace(b), config.closeDelay >= 0, windowCount(app) == 0 {
+                let closedFor = zeroSince[b].map { Date().timeIntervalSince($0) } ?? 0
+                if config.closeDelay == 0 || closedFor >= Double(config.closeDelay) {
+                    relock(b, reason: "reopened after its window was closed")
+                    hide(app)
+                    promptUnlock(app)
+                    return
+                }
+            }
+            if activated { unlocked[b] = Date() }
+            return
+        }
         hide(app)
         if activated { promptUnlock(app) }
     }
@@ -134,10 +156,10 @@ final class AppLocker {
                     lastWindowCount[b] = n
                 }
                 if n > 0 { hadWindow.insert(b); zeroSince[b] = nil }
-                else if hadWindow.contains(b) && !app.isHidden {
+                else if hadWindow.contains(b) && !app.isHidden && !inGrace(b) && config.closeDelay >= 0 {
                     let since = zeroSince[b] ?? Date()
                     zeroSince[b] = since
-                    if Date().timeIntervalSince(since) >= AppLocker.closedDebounce {
+                    if Date().timeIntervalSince(since) >= max(AppLocker.closedDebounce, Double(config.closeDelay)) {
                         relock(b, reason: "all windows closed")
                         continue
                     }
@@ -167,6 +189,7 @@ final class AppLocker {
                   icon: app.icon) { [weak self] ok in
             guard ok, let self = self else { return }
             self.unlocked[b] = Date()
+            self.unlockedAt[b] = Date()
             self.hadWindow.remove(b)
             Log.info("app lock: unlocked \(b)")
             app.unhide()

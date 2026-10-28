@@ -165,7 +165,7 @@ Lock apps on your own screen, so someone using your unlocked Mac can't open them
   | You… | Asks again? |
   |---|---|
   | open an app that wasn't running | yes |
-  | close its window (red button), app stays in the Dock, then reopen | yes |
+  | close its window (red button), app stays in the Dock, then reopen | yes, instantly (or after 30 s / 1 min / 5 min / never — your choice) |
   | quit or force-quit it, then reopen | yes |
   | minimize it, then bring it back | no |
   | leave it in the background longer than *Relock after* | yes |

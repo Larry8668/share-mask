@@ -219,7 +219,22 @@ struct MainView: View {
                     }
                 }
             }
-            addAppMenu("Lock an app") { model.actions.toggleLockApp($0) }
+            HStack {
+                addAppMenu("Lock an app") { model.actions.toggleLockApp($0) }
+                Spacer()
+                Menu {
+                    ForEach(AppModel.closeDelayChoices, id: \.0) { c in
+                        Button { model.actions.setCloseDelay(c.0) } label: {
+                            if c.0 == model.lockCloseDelay { Label(c.1, systemImage: "checkmark") } else { Text(c.1) }
+                        }
+                    }
+                } label: {
+                    Label("On close: \(AppModel.closeDelayChoices.first { $0.0 == model.lockCloseDelay }?.1.lowercased() ?? "instantly")",
+                          systemImage: "xmark.circle")
+                }
+                .menuStyle(.borderlessButton).fixedSize().font(.system(size: 11))
+                .help("When a locked app's window is closed, lock it again")
+            }
         }
     }
 

@@ -217,8 +217,19 @@ final class WelcomeWindow: NSObject, NSWindowDelegate {
 
     static let seenKey = "welcomeSeenVersion"
     static let currentVersion = 2
+    /// Only for genuinely new users, and only once. Someone who already used sharemask (presets file
+    /// or App lock settings exist, or they've seen any welcome) is marked as seen silently. A missing
+    /// permission later is shown in the menu, not by reopening this.
     static var shouldShowAutomatically: Bool {
-        UserDefaults.standard.integer(forKey: seenKey) < currentVersion || !CGPreflightScreenCaptureAccess()
+        let d = UserDefaults.standard
+        if d.object(forKey: seenKey) != nil { return false }
+        let existingUser = FileManager.default.fileExists(atPath: ConfigStore.fileURL.path) || AppLockStore.hasSavedConfig
+        if existingUser {
+            d.set(currentVersion, forKey: seenKey)
+            Log.info("welcome: existing user, not shown")
+            return false
+        }
+        return true
     }
     /// Test/README only: show the window as a brand-new user sees it.
     private let pretendFresh = ProcessInfo.processInfo.environment["SHAREMASK_PRETEND_NO_PERMISSIONS"] != nil

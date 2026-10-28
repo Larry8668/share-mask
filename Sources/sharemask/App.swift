@@ -94,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let updates = UpdateChecker()
     private let keysPanel = KeysPanel()
     private let welcome = WelcomeWindow()
+    private var isNewUser = false
     let model = AppModel()
     private lazy var mainWindow = MainWindowController(model: model)
     /// Marker left by an instance that handed over to the keep-alive agent after the user opened
@@ -193,6 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         updates.onChange = { [weak self] in self?.refreshMenu() }
         updates.start()
+        isNewUser = WelcomeWindow.shouldShowAutomatically   // before presets.json gets created below
         config.onChange = { [weak self] cfg in self?.applyConfig(cfg) }
         config.onError = { [weak self] _ in self?.refreshMenu() }
         config.start()
@@ -261,7 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         welcome.onRelaunch = { [weak self] in self?.relaunch() }
         if CommandLine.arguments.contains("--show-main") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.mainWindow.show() }
-        } else if WelcomeWindow.shouldShowAutomatically || CommandLine.arguments.contains("--welcome") {
+        } else if isNewUser || CommandLine.arguments.contains("--welcome") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.welcome.show() }
         } else if launchedByUserAtStart || CommandLine.arguments.contains("--show-main") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.mainWindow.show() }
@@ -676,6 +678,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         a.toggleLock = { [weak self] in self?.appLockCommand("toggle", nil) }
         a.toggleLockApp = { [weak self] b in self?.appLockCommand("app", b) }
+        a.setCloseDelay = { [weak self] v in self?.appLockCommand("closeRelock", "\(v)") }
         a.present = { [weak self] tv, mirror in self?.present(tv: tv, mirror: mirror) }
         a.stopPresenting = { [weak self] in self?.stopPresenting() }
         a.askScreen = { _ = CGRequestScreenCaptureAccess() }
@@ -725,6 +728,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if m.maskApps != masks { m.maskApps = masks }
         let lm = appLockModel()
         if m.lockOn != lm.enabled { m.lockOn = lm.enabled }
+        if m.lockCloseDelay != locker.config.closeDelay { m.lockCloseDelay = locker.config.closeDelay }
         let locks = lm.apps.map { AppModel.AppItem(id: $0.bundleID, name: $0.name, on: $0.locked, detail: $0.unlockedNow ? "unlocked" : "") }
         if m.lockApps != locks { m.lockApps = locks }
         let screens = AppDelegate.externalScreens().map { AppModel.Screen(id: $0.id, name: $0.name) }
@@ -809,7 +813,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: b).flatMap { Bundle(url: $0)?.infoDictionary?["CFBundleName"] as? String } ?? b
             return (b, name, c.apps.contains(b), unlockedNow.contains(b))
         }.sorted { ($0.locked ? 0 : 1, $0.name.lowercased()) < ($1.locked ? 0 : 1, $1.name.lowercased()) }
-        return .init(enabled: c.enabled, apps: apps, relockMinutes: c.relockMinutes, relockOnSleep: c.relockOnSleep,
+        return .init(enabled: c.enabled, apps: apps, relockMinutes: c.relockMinutes, closeDelay: c.closeDelay, relockOnSleep: c.relockOnSleep,
                      guardQuit: c.guardQuit, keepAlive: c.keepAlive, hasPassword: c.passwordHash != nil)
     }
 
@@ -847,6 +851,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let m = Int(arg ?? "5") ?? 5
             if m < locker.config.relockMinutes || !locker.isActive { locker.update { $0.relockMinutes = m } }
             else { change { [weak self] in self?.locker.update { $0.relockMinutes = m } } }
+        case "closeRelock":
+            let v = Int(arg ?? "0") ?? 0
+            let cur = locker.config.closeDelay
+            // stricter = locks sooner (never counts as loosest)
+            func rank(_ x: Int) -> Int { x < 0 ? Int.max : x }
+            if rank(v) <= rank(cur) || !locker.isActive { locker.update { $0.closeRelockSeconds = v } }
+            else { change { [weak self] in self?.locker.update { $0.closeRelockSeconds = v } } }
         case "sleep":
             if !locker.config.relockOnSleep { locker.update { $0.relockOnSleep = true } }
             else { change { [weak self] in self?.locker.update { $0.relockOnSleep = false } } }
@@ -1113,6 +1124,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             }
+        case "delay-30": locker.update { $0.closeRelockSeconds = 30 }
+        case "delay-instant": locker.update { $0.closeRelockSeconds = 0 }
+        case "close-reopen-fast":   // red button, then Dock-style reopen 0.3 s later
+            self.scriptAction("close-windows")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.scriptAction("open-textedit") }
         case "quit-textedit": NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first?.terminate()
         case "lock-app":
             NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first?.activate()

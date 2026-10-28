@@ -60,3 +60,19 @@ final class PresetTests: XCTestCase {
         XCTAssertFalse(UpdateChecker.isNewer("0.1.3", than: "0.1.4"))
     }
 }
+
+final class AppLockConfigTests: XCTestCase {
+    func testOldSavedConfigStillDecodes() throws {
+        // Saved by 0.1.9/0.2.0: no closeRelockSeconds key.
+        let old = #"{"enabled":true,"apps":["net.whatsapp.WhatsApp"],"relockMinutes":5,"relockOnSleep":true,"guardQuit":true,"keepAlive":true}"#
+        let c = try JSONDecoder().decode(AppLockConfig.self, from: old.data(using: .utf8)!)
+        XCTAssertTrue(c.enabled)
+        XCTAssertEqual(c.apps, ["net.whatsapp.WhatsApp"])
+        XCTAssertEqual(c.closeDelay, 0)   // default: instantly
+    }
+    func testPasswordHashRoundTrip() {
+        let h = AppLockStore.hash("test1234")
+        XCTAssertTrue(AppLockStore.verify("test1234", against: h))
+        XCTAssertFalse(AppLockStore.verify("nope", against: h))
+    }
+}
