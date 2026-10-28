@@ -22,7 +22,9 @@ enum Main {
         // (NSApplication init, NSScreen, SCShareableContent). Reading the main display's mode
         // is the one unavoidable query; mode reporting for the virtual display is only needed
         // by the `--probe <id>` child process anyway.
+        let tl = Date()
         let launch = Launch.createVirtualDisplayEarly()
+        Log.info("startup: launch checks \(Int(Date().timeIntervalSince(tl) * 1000)) ms")
 
         // SIGTERM/SIGINT (pkill, the Homebrew update script, logout) → a normal quit, so the proxy
         // display is released and any TV mirroring we switched off is restored.
@@ -36,11 +38,17 @@ enum Main {
         // One sharemask at a time (the keep-alive agent and a manual launch could otherwise overlap).
         // Wait briefly for a quitting instance (relaunch / agent handover) before giving up.
         let me = getpid()
+        // LaunchServices keeps listing a killed process for a few seconds, so confirm each candidate
+        // is really alive (kill(pid, 0)) — otherwise every relaunch after a force-quit waited 3 s,
+        // leaving locked apps unprotected meanwhile.
         func others() -> [NSRunningApplication] {
-            NSRunningApplication.runningApplications(withBundleIdentifier: "dev.sharemask.app").filter { $0.processIdentifier != me && !$0.isTerminated }
+            NSRunningApplication.runningApplications(withBundleIdentifier: "dev.sharemask.app")
+                .filter { $0.processIdentifier != me && !$0.isTerminated && kill($0.processIdentifier, 0) == 0 }
         }
+        let t0 = Date()
         var waited = 0.0
-        while !others().isEmpty && waited < 3 { Thread.sleep(forTimeInterval: 0.2); waited += 0.2 }
+        while !others().isEmpty && waited < 3 { Thread.sleep(forTimeInterval: 0.1); waited += 0.1 }
+        if waited > 0 { Log.info("startup: waited \(Int(Date().timeIntervalSince(t0) * 1000)) ms for a previous instance to exit") }
         if let other = others().first {
             Log.info("another sharemask (pid \(other.processIdentifier)) is running; exiting")
             exit(0)
@@ -138,6 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
         _ = launchedByUserAtStart
+        Log.info("startup: AppKit ready")
         // App lock first: a relaunch after a force-quit must re-hide locked apps immediately.
         locker.onChange = { [weak self] in self?.syncLockState() }
         locker.start()
