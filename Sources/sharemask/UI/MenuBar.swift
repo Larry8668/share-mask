@@ -28,6 +28,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
         var relaunch: () -> Void
         var bringBackStrays: () -> Void
         var chooseScreen: (CGDirectDisplayID) -> Void
+        var appLock: (String, String?) -> Void      // (command, argument)
         var present: (CGDirectDisplayID, Bool) -> Void   // (tv, mirror?)
         var stopPresenting: () -> Void
         var showKeys: () -> Void
@@ -67,6 +68,7 @@ final class MenuBar: NSObject, NSMenuDelegate {
     private let versionItem = NSMenuItem()
     private let screenItem = NSMenuItem()
     private let presentItem = NSMenuItem()
+    private let appLockItem = NSMenuItem()
     private let updateChecksItem = NSMenuItem()
     private let removeDisplayItem = NSMenuItem()
 
@@ -156,6 +158,8 @@ final class MenuBar: NSObject, NSMenuDelegate {
         edit.addItem(.separator())
         edit.addItem(item("Open presets.json", #selector(openPresets)))
         edit.addItem(item("Reload presets", #selector(reloadPresets)))
+        appLockItem.submenu = NSMenu()
+        menu.addItem(appLockItem)
         let editItem = NSMenuItem(title: "Edit regions", action: nil, keyEquivalent: "")
         editItem.submenu = edit
         menu.addItem(editItem)
@@ -441,6 +445,62 @@ final class MenuBar: NSObject, NSMenuDelegate {
             m.addItem(item("Stop presenting", #selector(stopPresenting)))
         }
     }
+    struct AppLockModel {
+        var enabled: Bool
+        var apps: [(bundleID: String, name: String, locked: Bool, unlockedNow: Bool)]
+        var relockMinutes: Int
+        var relockOnSleep: Bool
+        var guardQuit: Bool
+        var keepAlive: Bool
+        var hasPassword: Bool
+    }
+
+    /// "App lock ▸": everything app-lock lives here, one level down from the top menu.
+    func updateAppLock(_ m: AppLockModel) {
+        let lockedCount = m.apps.filter { $0.locked }.count
+        appLockItem.title = m.enabled ? "App lock: on (\(lockedCount) app\(lockedCount == 1 ? "" : "s"))" : "App lock: off"
+        let menu = appLockItem.submenu!
+        menu.removeAllItems()
+        func cmd(_ title: String, _ c: String, _ arg: String? = nil, state: Bool? = nil, enabled: Bool = true) -> NSMenuItem {
+            let mi = NSMenuItem(title: title, action: #selector(appLockCommand(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = [c, arg ?? ""]
+            if let st = state { mi.state = st ? .on : .off }
+            mi.isEnabled = enabled
+            return mi
+        }
+        let lockNow = cmd("Lock all now", "lockAll", enabled: m.enabled && m.apps.contains { $0.unlockedNow })
+        lockNow.keyEquivalent = "l"; lockNow.keyEquivalentModifierMask = [.command, .shift, .control]
+        menu.addItem(lockNow)
+        menu.addItem(cmd(m.enabled ? "Turn App lock off…" : "Turn App lock on", "toggle"))
+        menu.addItem(.separator())
+        let h = NSMenuItem(title: "Apps to lock", action: nil, keyEquivalent: ""); h.isEnabled = false
+        menu.addItem(h)
+        for a in m.apps {
+            let mi = cmd(a.name + (a.unlockedNow ? "  (unlocked)" : ""), "app", a.bundleID, state: a.locked)
+            menu.addItem(mi)
+        }
+        menu.addItem(.separator())
+        let relock = NSMenuItem(title: "Relock after", action: nil, keyEquivalent: "")
+        let rm = NSMenu()
+        for (label, mins) in [("Switching away", 0), ("1 minute", 1), ("5 minutes", 5), ("15 minutes", 15), ("1 hour", 60)] {
+            rm.addItem(cmd(label, "relock", "\(mins)", state: m.relockMinutes == mins))
+        }
+        rm.addItem(.separator())
+        rm.addItem(cmd("Also when the screen locks or sleeps", "sleep", state: m.relockOnSleep))
+        relock.submenu = rm
+        menu.addItem(relock)
+        menu.addItem(cmd("Require unlock to quit sharemask", "guardQuit", state: m.guardQuit))
+        menu.addItem(cmd("Relaunch sharemask if force-quit", "keepAlive", state: m.keepAlive))
+        menu.addItem(cmd(m.hasPassword ? "Change sharemask password…" : "Set a sharemask password…", "password"))
+        if m.hasPassword { menu.addItem(cmd("Remove sharemask password…", "removePassword")) }
+    }
+
+    @objc private func appLockCommand(_ sender: NSMenuItem) {
+        guard let pair = sender.representedObject as? [String], pair.count == 2 else { return }
+        actions.appLock(pair[0], pair[1].isEmpty ? nil : pair[1])
+    }
+
     @objc private func presentChosen(_ sender: NSMenuItem) {
         actions.present(CGDirectDisplayID(sender.tag), (sender.representedObject as? Bool) ?? false)
     }

@@ -18,6 +18,7 @@ presenting) are pixellated **only on the shared feed**. Your own screen stays ex
 - Fails closed: if capture stalls, viewers see black, not a stale frame, and one key removes the
   shared display to end the share outright.
 - A "what others see" preview window, and persistent logs for when something looks off.
+- **App lock**: keep chosen apps hidden behind Touch ID (or your Mac password) on your own screen.
 
 macOS 14+ (built and measured on macOS 27.0.1), Apple Silicon, Swift 5.9+/SwiftPM. Not sandboxed,
 not notarised, uses private CoreGraphics API. Single user, single machine.
@@ -139,6 +140,30 @@ asks whether to present with masks, in one of two ways (also under **Present to 
 macOS's own mirror mode can't carry masks (the system copies the pixels itself), so if the TV
 connects mirrored, sharemask switches it to a separate display after you confirm, and switches it
 back when you stop or quit. Unplugging the TV stops presenting automatically.
+
+### App lock
+Lock apps on your own screen, so someone using your unlocked Mac can't open them.
+
+![Opening a locked app shows a Touch ID lock card; the App lock menu lists the apps](docs/applock.png)
+
+- **App lock ▸ Apps to lock**: tick apps. A locked app stays hidden; opening it (Dock, ⌘-Tab,
+  Spotlight) shows a lock card. Unlock with **Touch ID**, your **Mac login password** (always works,
+  so you can't lock yourself out), or an optional **sharemask password**.
+- **Relock** after the app has been in the background for a chosen time, when the screen locks or
+  sleeps, or right away with **Lock all now** (⌃⇧⌘L).
+- **Require unlock to quit sharemask**: ⌘Q / Quit asks for Touch ID too. Shutdown, restart and
+  logout are never blocked.
+- **Relaunch if force-quit**: a per-user login agent (`~/Library/LaunchAgents/dev.sharemask.keepalive.plist`,
+  no admin rights) brings sharemask back about a second after a Force Quit or `kill`, and it re-hides
+  locked apps first. An authenticated Quit stays quit.
+- Changing any App lock setting (except making it stricter) asks for authentication. Settings live
+  in your Keychain, not in presets.json, so they can't be edited around.
+- Locked apps are also masked whole-window in screen shares and presentations.
+
+What it is and isn't: a guard against casual snooping on an unlocked Mac. Someone already logged in
+as you and determined enough can still unload the agent, delete the app, or read an app's files
+from disk; only your Mac's login lock is a real barrier. Uninstalling with Homebrew removes the
+agent.
 
 ### Multiple monitors
 With more than one screen connected, the menu shows **Share screen: <name> ▸** and the meeting
@@ -280,6 +305,13 @@ Encoded in `VirtualDisplay.swift`; measured on macOS 27.0.1 with `make probe`:
 8. Created at the real display's pixel size with a ~110 DPI physical size, so macOS enters the
    native 1× mode. With a Retina-like DPI it would come up at half size. Note that
    `CGDisplayPixelsWide` returns *points* on Retina displays; the pixel size is read from the mode.
+
+## What sharemask stores
+
+- `~/.config/sharemask/presets.json`: masks, rules, shortcuts.
+- `~/Library/Logs/sharemask/`: logs (≤ ~10 MB).
+- Keychain item `dev.sharemask.applock`: App lock settings and the (hashed) sharemask password.
+- `~/Library/LaunchAgents/dev.sharemask.keepalive.plist`: only while App lock's relaunch option is on.
 
 ## Network use
 

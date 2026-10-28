@@ -47,6 +47,8 @@ struct ResolveOptions: Equatable {
     var revealed: Set<String> = []
     /// Temporarily disabled masks: "bundleID" (whole app), "bundleID/regionName" or "rule:<name>".
     var disabled: Set<String> = []
+    /// Apps masked whole-window regardless of presets (App lock's list), unless revealed.
+    var forceMasked: Set<String> = []
 }
 
 /// Pure function: presets × window geometry → pixel rects for this frame.
@@ -103,6 +105,9 @@ enum RegionResolver {
             if options.revealed.contains(bundleID) || options.disabled.contains(bundleID) { continue }
 
             var regions: [(PresetRegion, String)] = []   // (region, disable key)
+            if options.forceMasked.contains(bundleID) {
+                regions.append((PresetRegion(name: "app lock", rect: CGRect(x: 0, y: 0, width: 1, height: 1), mode: presets.defaultMode), "applock:\(bundleID)"))
+            }
             if let app = presets.apps[bundleID], !(app.whenFrontmostOnly && frontmostBundleID != bundleID) {
                 regions += app.regions.map { ($0, "\(bundleID)/\($0.name)") }
             }
