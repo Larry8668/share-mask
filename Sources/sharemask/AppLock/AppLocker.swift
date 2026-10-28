@@ -20,7 +20,29 @@ final class AppLocker {
     /// Zero windows must last this long before relocking: while an app un-hides or switches
     /// Spaces, Accessibility can briefly report no windows (seen in testing: a false relock 2.7 s
     /// after unlocking).
-    static let closedDebounce: TimeInterval = 0.5
+    static let closedDebounce: TimeInterval = 1.0
+    /// Right after an app opens a window it may drop or swap windows while setting up (seen with
+    /// WhatsApp: a window, then 0 windows 1.4 s later, while the user was just opening it). A drop to
+    /// zero within this long of a window appearing doesn't count as "closed".
+    static let windowSettle: TimeInterval = 2.0
+    /// A reopen only counts if the app really sat at zero windows this long (ignores flickers).
+    static let minClosedForReopen: TimeInterval = 0.25
+    private var windowAppearedAt: [String: Date] = [:]
+    /// Window-server IDs of the app's windows that were visible while it had windows. Only these
+    /// are checked for "on another desktop" (apps have hidden helper windows on other Spaces —
+    /// checking any window gave a false "away" for Activity Monitor after a real close).
+    private var visibleWindowIDs: [String: Set<CGWindowID>] = [:]
+
+    /// The app's normal-size windows that the window server shows on screen right now.
+    private func onScreenWindowIDs(_ app: NSRunningApplication) -> Set<CGWindowID> {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
+        var ids = Set<CGWindowID>()
+        for w in list where (w[kCGWindowOwnerPID as String] as? pid_t) == app.processIdentifier && ((w[kCGWindowLayer as String] as? Int) ?? 1) == 0 {
+            let b = (w[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) } ?? .zero
+            if b.width > 200 && b.height > 150, let id = w[kCGWindowNumber as String] as? UInt32 { ids.insert(id) }
+        }
+        return ids
+    }
     /// For a few seconds after unlocking (the app is un-hiding) an empty window list is not trusted.
     static let unlockGrace: TimeInterval = 3
     private var unlockedAt: [String: Date] = [:]
@@ -106,10 +128,11 @@ final class AppLocker {
         guard SMSpacesAPIAvailable() else { return false }
         let active = SMActiveSpace()
         guard active != 0, let all = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return false }
+        let known = app.bundleIdentifier.flatMap { visibleWindowIDs[$0] } ?? []
+        guard !known.isEmpty else { return false }   // never saw it visible → can't claim it's elsewhere
         let mains = all.filter {
-            ($0[kCGWindowOwnerPID as String] as? pid_t) == app.processIdentifier && (($0[kCGWindowLayer as String] as? Int) ?? 1) == 0
-                && (($0[kCGWindowAlpha as String] as? Double) ?? 0) > 0
-                && ((($0[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) }).map { $0.width > 200 && $0.height > 150 } ?? false)
+            ($0[kCGWindowOwnerPID as String] as? pid_t) == app.processIdentifier
+                && ($0[kCGWindowNumber as String] as? UInt32).map { known.contains($0) } ?? false
         }
         for w in mains {
             guard let id = w[kCGWindowNumber as String] as? UInt32 else { continue }
@@ -133,7 +156,9 @@ final class AppLocker {
     private func shouldRelockOnReopen(_ b: String, closedSince: Date) -> Bool {
         let delay = config.closeDelay(for: b)
         guard unlocked[b] != nil, hadWindow.contains(b), !inGrace(b), delay >= 0 else { return false }
-        return delay == 0 || Date().timeIntervalSince(closedSince) >= Double(delay)
+        let closedFor = Date().timeIntervalSince(closedSince)
+        guard closedFor >= AppLocker.minClosedForReopen else { return false }
+        return delay == 0 || closedFor >= Double(delay)
     }
 
     private func relockReopened(_ app: NSRunningApplication, _ b: String, via: String) {
@@ -147,6 +172,7 @@ final class AppLocker {
         guard let app = NSRunningApplication(processIdentifier: pid), let b = app.bundleIdentifier, unlocked[b] != nil else { return }
         // Was it at zero windows (closed) just before this window appeared?
         let wasClosed = !awayOnOtherSpace.contains(b) && (zeroSince[b] != nil || lastWindowCount[b] == 0)
+        defer { windowAppearedAt[b] = Date() }
         Log.info("app lock: \(b) created a window (was closed: \(wasClosed))")
         if wasClosed, shouldRelockOnReopen(b, closedSince: zeroSince[b] ?? .distantPast) {
             relockReopened(app, b, via: "window created")
@@ -181,6 +207,7 @@ final class AppLocker {
         unlocked[b] = nil
         hadWindow.remove(b)
         awayOnOtherSpace.remove(b)
+        visibleWindowIDs[b] = nil
         unobserve(b)
         zeroSince[b] = nil
         lastWindowCount[b] = nil
@@ -271,10 +298,23 @@ final class AppLocker {
                     Log.info("app lock: \(b) windows \(lastWindowCount[b].map(String.init) ?? "?") → \(n)\(app.isHidden ? " (hidden)" : "")")
                     lastWindowCount[b] = n
                 }
+                if n > 0 {
+                    let vis = onScreenWindowIDs(app)
+                    if !vis.isEmpty { visibleWindowIDs[b] = vis }
+                }
+                if n > 0 && (lastWindowCount[b] ?? 0) == 0 && windowAppearedAt[b].map({ Date().timeIntervalSince($0) > 0.5 }) ?? true {
+                    windowAppearedAt[b] = Date()
+                }
                 if n > 0 && awayOnOtherSpace.contains(b) {
                     awayOnOtherSpace.remove(b)
                     Log.info("app lock: \(b) window visible again on this desktop (was on another desktop, not closed)")
                     hadWindow.insert(b); zeroSince[b] = nil
+                    continue
+                }
+                if n == 0, hadWindow.contains(b), !onScreenWindowIDs(app).isEmpty {
+                    // Accessibility says no windows, the window server still shows one: a glitch
+                    // (seen with WhatsApp right after opening), not a close.
+                    if zeroSince[b] == nil { Log.info("app lock: \(b) reports 0 windows but one is still on screen → ignoring") }
                     continue
                 }
                 if n == 0, hadWindow.contains(b), zeroSince[b] == nil, isOnAnotherDesktop(app) {
@@ -293,7 +333,8 @@ final class AppLocker {
                     }
                     hadWindow.insert(b); zeroSince[b] = nil
                 }
-                else if hadWindow.contains(b) && !app.isHidden && !inGrace(b) && config.closeDelay(for: b) >= 0 {
+                else if hadWindow.contains(b) && !app.isHidden && !inGrace(b) && config.closeDelay(for: b) >= 0
+                            && !(windowAppearedAt[b].map { Date().timeIntervalSince($0) < AppLocker.windowSettle } ?? false) {
                     let since = zeroSince[b] ?? Date()
                     zeroSince[b] = since
                     if Date().timeIntervalSince(since) >= max(AppLocker.closedDebounce, Double(config.closeDelay(for: b))) {

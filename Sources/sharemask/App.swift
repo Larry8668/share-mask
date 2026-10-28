@@ -287,6 +287,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         welcome.onFinished = { [weak self] in self?.mainWindow.show() }
         wireModelActions()
         mainWindow.onWillShow = { [weak self] in self?.updateModel() }
+        mainWindow.nextFocus = { [weak self] in
+            guard let self = self else { return nil }
+            let prev = self.lastOtherFront
+            Log.info("main window closed: previous app was \(prev?.bundleIdentifier ?? "none") (locked: \(prev?.bundleIdentifier.map { self.locker.isLocked($0) } ?? false))")
+            if let b = prev?.bundleIdentifier, self.locker.isLocked(b) {
+                Log.info("main window closed: \(b) is locked, focusing Finder instead of popping its lock card")
+                return NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first
+            }
+            return prev
+        }
         NSApp.mainMenu = AppDelegate.makeMainMenu()
         welcome.onRelaunch = { [weak self] in self?.relaunch() }
         if CommandLine.arguments.contains("--show-main") {
@@ -1439,6 +1449,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             }
+        case "show-main": mainWindow.show()
+        case "close-main": mainWindow.closeForTesting()
+        case "relock-test-app": locker.lockNow(AppDelegate.testAppID)
+        case "close-soon-after-open":   // window appears, then closed 0.8 s later (inside the settle period)
+            NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: AppDelegate.testAppPath), configuration: .init())
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.scriptAction("close-windows") }
         case "cmd-w":   // test: real ⌘W key press (needs Accessibility)
             let src = CGEventSource(stateID: .hidSystemState)
             let down = CGEvent(keyboardEventSource: src, virtualKey: 13, keyDown: true); down?.flags = .maskCommand
