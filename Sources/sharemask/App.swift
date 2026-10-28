@@ -437,10 +437,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if locker.isLocked(bundleID), let app = NSRunningApplication(processIdentifier: pid) {
             Log.info("picker: \(bundleID) is locked — asking to unlock before editing")
             locker.promptUnlock(app, detail: "Unlock to edit what sharemask blurs in it.") { [weak self] in
-                self?.waitForWindow(app, attempts: 20) { self?.pickRegion(pid: pid, bundleID: bundleID) }
+                self?.ensureWindow(app) { self?.pickRegion(pid: pid, bundleID: bundleID) }
             }
             return
         }
+        // Running but with no window open (closed with the red button): ask it to open one, like a
+        // Dock click — activating alone doesn't.
+        if let app = NSRunningApplication(processIdentifier: pid), locker.windowCountFor(app) == 0, !pickerReopenTried {
+            pickerReopenTried = true
+            Log.info("picker: \(bundleID) has no open window — asking it to open one")
+            ensureWindow(app) { [weak self] in self?.pickRegion(pid: pid, bundleID: bundleID) }
+            return
+        }
+        pickerReopenTried = false
         let picker = RegionPicker(bundleID: bundleID, pid: pid,
                                   existing: config.config.apps[bundleID]?.regions ?? [])
         picker.onSave = { [weak self] bundleID, regions in
@@ -692,6 +701,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func vdSafe(_ p: Pipeline) -> Bool { p.virtualDisplay?.isSafeToPresent ?? true }
+
+    private var pickerReopenTried = false
+
+    /// Makes sure the app has a window: if it has none, sends the same "reopen" a Dock click sends,
+    /// then waits (≤ 3 s) for the window before calling `then`.
+    private func ensureWindow(_ app: NSRunningApplication, then: @escaping () -> Void) {
+        if locker.windowCountFor(app) == 0, let url = app.bundleURL {
+            let cfg = NSWorkspace.OpenConfiguration()
+            cfg.activates = true
+            NSWorkspace.shared.openApplication(at: url, configuration: cfg) { _, err in
+                if let err = err { Log.warn("picker: reopen failed: \(err.localizedDescription)") }
+            }
+        }
+        waitForWindow(app, attempts: 30, then: then)
+    }
 
     /// Calls `then` once the app has a window (checks every 0.1 s, gives up after `attempts`).
     private func waitForWindow(_ app: NSRunningApplication, attempts: Int, then: @escaping () -> Void) {
@@ -1321,6 +1345,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 pickRegion(pid: a.processIdentifier, bundleID: AppDelegate.testAppID)
             }
         case "picker-cancel": picker?.cancelForTesting()
+        case "close-test-app-window": self.scriptAction("close-windows")
         case "close-reopen-frontmost":   // the real case: app stays frontmost, window closed, reopened from the Dock
             NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first?.activate()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
