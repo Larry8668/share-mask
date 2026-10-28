@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 import ApplicationServices
 import Carbon
 import ServiceManagement
@@ -688,6 +689,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         a.toggleLock = { [weak self] in self?.appLockCommand("toggle", nil) }
         a.toggleLockApp = { [weak self] b in self?.appLockCommand("app", b) }
         a.setCloseDelay = { [weak self] v in self?.appLockCommand("closeRelock", "\(v)") }
+        a.lockNow = { [weak self] b in self?.locker.lockNow(b) }
+        a.chooseAppToLock = { [weak self] in
+            let panel = NSOpenPanel()
+            panel.title = "Choose an app to lock"
+            panel.directoryURL = URL(fileURLWithPath: "/Applications")
+            panel.allowedContentTypes = [.application]
+            panel.canChooseDirectories = false
+            panel.allowsMultipleSelection = true
+            NSApp.activate(ignoringOtherApps: true)
+            guard panel.runModal() == .OK else { return }
+            for url in panel.urls {
+                guard let b = Bundle(url: url)?.bundleIdentifier else { continue }
+                if !(self?.locker.config.apps.contains(b) ?? true) { self?.appLockCommand("app", b) }
+            }
+        }
         a.present = { [weak self] tv, mirror in self?.present(tv: tv, mirror: mirror) }
         a.stopPresenting = { [weak self] in self?.stopPresenting() }
         a.askScreen = { _ = CGRequestScreenCaptureAccess() }
@@ -1106,6 +1122,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "present-extend", "present-mirror":
             if let tv = AppDelegate.externalScreens().first { present(tv: tv.id, mirror: action == "present-mirror") }
         case "stop-present": stopPresenting()
+        case "lock-setup-demo":  // test: a few locked apps for screenshots
+            locker.update { $0.enabled = true; $0.apps = [AppDelegate.testAppID, "com.apple.Notes", "com.apple.Photos"]; $0.keepAlive = false }
         case "lock-setup":       // test: throwaway password, lock TextEdit, App lock on
             setLockPassword("test1234")
             locker.update { $0.enabled = true; $0.apps = [AppDelegate.testAppID]; $0.relockMinutes = 60; $0.keepAlive = false }
@@ -1135,6 +1153,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         case "delay-30": locker.update { $0.closeRelockSeconds = 30 }
         case "delay-instant": locker.update { $0.closeRelockSeconds = 0 }
+        case "close-reopen-frontmost":   // the real case: app stays frontmost, window closed, reopened from the Dock
+            NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first?.activate()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                Log.info("script: frontmost before close = \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?")")
+                self.scriptAction("close-windows")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    Log.info("script: frontmost before reopen = \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?")")
+                    NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: AppDelegate.testAppPath), configuration: .init())
+                }
+            }
         case "close-reopen-fast":   // red button, then Dock-style reopen 0.3 s later
             self.scriptAction("close-windows")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.scriptAction("open-textedit") }

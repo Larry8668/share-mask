@@ -43,6 +43,8 @@ final class AppModel: ObservableObject {
         var toggleLock: () -> Void = {}
         var toggleLockApp: (String) -> Void = { _ in }
         var setCloseDelay: (Int) -> Void = { _ in }
+        var lockNow: (String) -> Void = { _ in }
+        var chooseAppToLock: () -> Void = {}
         var present: (UInt32, Bool) -> Void = { _, _ in }
         var stopPresenting: () -> Void = {}
         var askScreen: () -> Void = {}

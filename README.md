@@ -1,37 +1,21 @@
 # sharemask
 
+**Share your screen without sharing your chats.** A macOS menu-bar app: when you share your screen
+in Zoom, Meet, Teams, Slack or FaceTime, the parts you choose (a WhatsApp chat list, a Slack
+sidebar, notification banners) are pixellated **only for the people watching**. Your own screen
+stays exactly as it is.
+
 ![Your screen stays untouched; the call sees the chat list pixellated](docs/demo.png)
 
-**Share your screen without sharing your chats.**
-
-> **New in 0.2:** present to a TV or projector with masks (HDMI, AirPlay), App lock with Touch ID,
-> multi-monitor support, simple ⌃⌥ keys while sharing, and a sharemask display that only exists
-> while you're actually sharing. See the [0.2.0 release notes](https://github.com/Larry8668/share-mask/releases/tag/v0.2.0). sharemask is a macOS menu-bar app that lets you
-screen-share in Zoom, Meet, Teams, Slack or FaceTime while the parts you choose (the WhatsApp chat
-list, a Slack sidebar, every notification banner, or everything except the one app you're
-presenting) are pixellated **only on the shared feed**. Your own screen stays exactly as it is.
-
-- Pixellate, blur or black out regions of any app — drawn with an overlay editor (rectangles,
-  squares, circles) directly over the window.
-- Masks follow windows as they move and resize, and respect whatever overlaps them.
-- **Allowlist mode**: mask the entire screen except the apps you name.
-- **Hold a key to reveal** an app for a moment, or untick a single mask, without stopping the share.
-- **Panic key** blacks out the whole feed on the next frame.
-- Captures only while you're in a meeting (microphone in use or a share in progress), so macOS's
-  recording indicator isn't on all day.
-- Fails closed: if capture stalls, viewers see black, not a stale frame, and one key removes the
-  shared display to end the share outright.
-- A "what others see" preview window, and persistent logs for when something looks off.
-- **App lock**: keep chosen apps hidden behind Touch ID (or your Mac password) on your own screen.
-
-macOS 14+ (built and measured on macOS 27.0.1), Apple Silicon, Swift 5.9+/SwiftPM. Not sandboxed,
-not notarised, uses private CoreGraphics API. Single user, single machine.
+- **Draw what to hide** right on top of any app: rectangles, squares, circles. Masks follow the window.
+- **Panic key** (⌃⌥B) pixellates everything instantly; **hold ⌃⌥R** to reveal an app for a moment.
+- **Present in a room** over HDMI or AirPlay with the same masks.
+- **App lock**: keep chosen apps behind Touch ID on your own Mac.
+- Starts by itself when a call begins, and stays out of the way otherwise.
 
 ## Install
 
 Requires macOS 14 or later on Apple Silicon.
-
-**Homebrew**
 
 ```sh
 brew tap Larry8668/sharemask
@@ -39,331 +23,38 @@ brew trust Larry8668/sharemask     # Homebrew 7+: third-party taps must be trust
 brew install --cask sharemask
 ```
 
-**Manual**: download `sharemask-<version>.zip` from the
-[releases page](https://github.com/Larry8668/share-mask/releases), unzip, move `sharemask.app` to
-Applications, then right-click → Open the first time (the app is signed but not notarised).
+Or download the zip from the [releases page](https://github.com/Larry8668/share-mask/releases),
+move `sharemask.app` to Applications and right-click → Open the first time (it's signed but not
+notarised). To build it yourself, see [Building from source](docs/BUILDING.md).
 
-**From source**: `make identity && make run` (see Build below).
+## Getting started
 
-On first launch a short **welcome** (three pages) shows what sharemask does, gets the two
-permissions with one click each, and points at the menu-bar icon (a crossed eye). After that,
-opening sharemask from Finder, Launchpad or the Dock shows its **window**: a live status orb, big
-Start / Panic buttons, and cards for Masks, App lock and Present. The menu-bar icon has the same
-things for quick access. Reopen the welcome any time: Settings ▸ Setup & permissions…
+1. **Open sharemask.** A short welcome asks for two permissions, Screen Recording (required) and
+   Accessibility (recommended), with one click each.
+2. **Choose what to hide**: in the sharemask window, Masks ▸ **Add an app**, draw boxes over the
+   private parts, Save.
+3. **Join a call.** sharemask asks to start; then, in your call app, share the screen called
+   **sharemask**. Viewers see the masked version; you see everything.
 
-First launch: grant **Screen Recording** when asked (System Settings → Privacy & Security → Screen &
-System Audio Recording), then relaunch if macOS asks you to. The app lives in the menu bar as a
-crossed-eye icon; in your call app, share the display named **sharemask**.
+sharemask lives in the menu bar as a crossed eye (⊘). Open it from Finder or the Dock for the full
+window; ⌃⌥K shows every key while you're sharing.
 
-## How it works
+## Privacy at a glance
 
-macOS offers no "visible to capture but invisible locally" window. So sharemask is a **proxy display**:
+Everything happens on your Mac. Frames are never saved or sent anywhere; the only network request
+is a daily check for a new version on GitHub (you can turn it off). Details:
+[Privacy & data](docs/PRIVACY.md).
 
-```
-real display ──SCStream 60fps──▶ Redactor (Core Image, GPU) ──▶ CAMetalLayer window on a
-                                  rects from live window geometry   virtual display "sharemask"
-                                                                    ◀── you share THIS in Zoom/Meet
-```
+## Documentation
 
-1. A virtual display named **sharemask** is created with the private `CGVirtualDisplay` API at the
-   real main display's pixel size (e.g. 2940×1912, 1×).
-2. ScreenCaptureKit captures the real display (cursor, menu bar, Spaces, z-order for free).
-3. Every frame, the window list (`CGWindowListCopyWindowInfo`) is matched against your presets;
-   regions of matching windows are pixellated/blurred/blacked, minus anything that overlaps them.
-4. The result is drawn into a fullscreen window on the virtual display. In your call, pick the
-   display called **sharemask** when choosing what to share.
-
-Pixellation at a coarse block size (default 24 px) is the default mode on purpose: a Gaussian blur
-at small radius is partially invertible; coarse pixellation is not.
-
-## Build
-
-```sh
-make identity   # once: creates a stable self-signed "sharemask-dev" signing identity (no GUI)
-make            # swift build + bundle + sign → build/sharemask.app
-make run        # build and launch
-make test       # RegionResolver / preset unit tests (pure, no window server)
-make probe      # CLI: list displays, create + remove a virtual display, print timings
-```
-
-Why the identity matters: ad-hoc signatures change on every build and macOS silently revokes the
-Screen Recording grant. `make identity` puts the certificate in its own keychain
-(`~/Library/Keychains/sharemask-dev.keychain-db`) with codesign pre-authorised so builds never
-prompt. `make` falls back to ad-hoc with a warning if the identity is missing.
-
-Always launch through LaunchServices (`make run` / `open build/sharemask.app` / double-click). If you
-run the binary directly from a terminal, macOS attributes the Screen Recording request to the
-*terminal* (the "responsible process"), prompts for the terminal instead, and sharemask's own grant
-is never consulted. Logs: `/usr/bin/log show --last 5m --info --predicate 'subsystem == "dev.sharemask.app"'`
-(note `log` is also a zsh builtin).
-
-First launch: grant **Screen Recording** to sharemask (System Settings → Privacy & Security →
-Screen & System Audio Recording). If macOS asks for a relaunch, use *Relaunch sharemask* in the menu.
-
-## Using it
-
-Menu bar icon: grey = stopped, green = proxy active, red = PANIC, yellow = error (hover for details).
-
-The menu keeps the essentials on top; everything else is one level down.
-
-| Menu item | Default hotkey | What it does |
-|---|---|---|
-| Start capturing / Stop | | Starts capture (creating the “sharemask” display), or stops capture or presenting and returns to standby. |
-| Panic | ⌘⇧⌃B | Pixellates the **whole** feed on the next frame (≤ 17 ms). Press again to restore. |
-| End share now (Troubleshooting ▸) | ⌃⌥X, ⌘⇧⌃X | Emergency stop: removes the “sharemask” display (ends the share in your call app) or stops presenting; back to standby, no relaunch needed. |
-| Masks ▸ | ⌘⇧⌃M, ⌘⇧⌃A | Per-app masks on/off, allowlist mode, and ticks for each app, region, rule and notification masking (session only). Hold ⌘⇧⌃R to reveal the frontmost app. |
-| Edit regions ▸ | ⌘⇧⌃P | Region editor for the frontmost app or any running app, configured apps (edit/remove), presets.json. |
-| What others see | | Floating preview of the live proxy output (never captured). |
-| Settings ▸ | | Shortcuts (press-to-remap), Launch at login, Pointer guard, status HUD. |
-| Troubleshooting ▸ | | Remove proxy display now, show log file, dump window list, relaunch. |
-| ⚠ Bring back N windows… | | Appears only if another app put a window on the hidden display. |
-| sharemask 0.1.x ▸ | | Version and update status. **Check for updates now**, release notes, copy the update command, and **Update now** when a newer release exists (runs `brew upgrade --cask sharemask` in Terminal and relaunches). |
-
-### Keys while sharing
-While sharemask is capturing or presenting, simple ⌃⌥ keys are live (they're released again when it
-stops, so they never clash with other apps day to day). A card listing them appears the first time
-a session starts; ⌃⌥K shows it again.
-
-| Key | Action |
+| | |
 |---|---|
-| ⌃⌥B | Panic: pixellate everything / restore |
-| ⌃⌥M | All per-app masks off / on |
-| ⌃⌥R (hold) | Reveal the frontmost app while held |
-| ⌃⌥1 … ⌃⌥9 | Unmask / re-mask app #1–9 (numbered in Masks ▸) |
-| ⌃⌥0 | Re-enable every mask |
-| ⌃⌥A | Allowlist mode on / off |
-| ⌃⌥X | End share / stop presenting |
-| ⌃⌥K | Show the key card |
+| [Using sharemask](docs/USING.md) | The app window, the menu, keys, drawing masks, meetings |
+| [App lock](docs/APP-LOCK.md) | Locking apps with Touch ID, when it asks again, quit protection |
+| [Presenting in a room](docs/PRESENTING.md) | TVs and projectors over HDMI / AirPlay, multiple monitors |
+| [Configuration](docs/CONFIGURATION.md) | `presets.json`: masks, rules, allowlist, shortcuts |
+| [Privacy & data](docs/PRIVACY.md) | What's stored, network use, logs |
+| [How it works](docs/HOW-IT-WORKS.md) | The proxy-display design, measured behaviour, performance |
+| [Building from source](docs/BUILDING.md) · [Porting](docs/PORTING.md) · [Releasing](packaging/RELEASING.md) | For developers |
 
-The ⌃⇧⌘ shortcuts (panic, toggle, pick, reveal, allowlist, end share) stay active all the time and
-can be remapped under Settings ▸ Shortcuts.
-
-### Presenting in a room (HDMI, AirPlay, Sidecar)
-When a TV or projector connects (cable, or AirPlay from Control Center ▸ Screen Mirroring), sharemask
-asks whether to present with masks, in one of two ways (also under **Present to <screen> ▸**):
-
-- **Masked extend**: keep extending as usual and drag windows onto the TV; masked parts of those
-  windows come out pixellated on the TV. Your laptop stays private.
-- **Masked mirror**: the TV shows your whole laptop screen, masked. Nothing else can appear on the
-  TV, and your cursor stays on the laptop.
-
-macOS's own mirror mode can't carry masks (the system copies the pixels itself), so if the TV
-connects mirrored, sharemask switches it to a separate display after you confirm, and switches it
-back when you stop or quit. Unplugging the TV stops presenting automatically.
-
-### App lock
-Lock apps on your own screen, so someone using your unlocked Mac can't open them.
-
-![Opening a locked app shows a Touch ID lock card; the App lock menu lists the apps](docs/applock.png)
-
-- **App lock ▸ Apps to lock**: tick apps. A locked app stays hidden; opening it (Dock, ⌘-Tab,
-  Spotlight) shows a lock card and the **Touch ID prompt starts by itself**. Your **Mac login
-  password** always works too (so you can't lock yourself out); an optional **sharemask password**
-  can be typed on the card instead.
-- **When it asks again** (relocks):
-
-  | You… | Asks again? |
-  |---|---|
-  | open an app that wasn't running | yes |
-  | close its window (red button), app stays in the Dock, then reopen | yes, instantly (or after 30 s / 1 min / 5 min / never — your choice) |
-  | quit or force-quit it, then reopen | yes |
-  | minimize it, then bring it back | no |
-  | leave it in the background longer than *Relock after* | yes |
-  | lock the screen / let the display sleep | yes (optional) |
-
-- **Shortcuts**: ⌃⌘L locks the app in front (adds it to the list if it isn't there yet), ⌃⇧⌘L
-  locks every app. Both are remappable in Settings ▸ Shortcuts.
-- **Require unlock to quit sharemask**: ⌘Q / Quit asks for Touch ID too. Shutdown, restart and
-  logout are never blocked.
-- **Relaunch if force-quit**: a per-user login agent (`~/Library/LaunchAgents/dev.sharemask.keepalive.plist`,
-  no admin rights) brings sharemask back about a second after a Force Quit or `kill`, and it re-hides
-  locked apps first. An authenticated Quit stays quit.
-- Changing any App lock setting (except making it stricter) asks for authentication. Settings live
-  in your Keychain, not in presets.json, so they can't be edited around.
-- Locked apps are also masked whole-window in screen shares and presentations.
-
-What it is and isn't: a guard against casual snooping on an unlocked Mac. Someone already logged in
-as you and determined enough can still unload the agent, delete the app, or read an app's files
-from disk; only your Mac's login lock is a real barrier. Uninstalling with Homebrew removes the
-agent.
-
-### Multiple monitors
-With more than one screen connected, the menu shows **Share screen: <name> ▸** and the meeting
-prompt has a screen picker; the proxy display is sized to whichever screen you pick, and the
-choice is remembered.
-
-macOS places a new display next to the existing ones, sometimes *between* two real screens. The
-first time that happens for a given monitor setup, sharemask moves the proxy display to a corner
-where it touches your screens only diagonally (using a short-lived helper process, because moving
-it from the app itself would make it impossible to remove until quit). macOS remembers that spot
-for next time. If placement ever fails, the pointer guard switches itself off rather than block
-your cursor.
-
-### The proxy display exists only while capturing
-The “sharemask” display is created when capture starts (you accept the meeting prompt or press
-Start) and removed when it stops. Outside meetings there is no extra screen at all.
-
-While it exists, macOS treats it as a real monitor: apps can open windows on it and macOS restores
-windows onto it when it reappears. Those windows would be invisible to you (a Finder error dialog
-hidden there once stopped a Mac from shutting down). sharemask watches for this every second:
-
-- With **Accessibility** permission (optional, asked the first time it happens) it moves such
-  windows back to your real screen automatically.
-- Without it, it tells you and offers to remove the display, which makes macOS move them home.
-
-### Region editor
-A transparent overlay sits exactly over the app's window (and follows it if it moves). Drag on
-empty space to draw a **rectangle, square or circle**; drag a shape to move it; drag its handles to
-resize; arrow keys nudge; Delete removes; Esc cancels; Enter saves. Each shape shows the actual
-pixellation preview, and the toolbar sets its mode (pixellate / blur / black) or drops in a
-template (left/right sidebar, top bar, whole window, centre circle). Regions are stored
-normalised to the window, so they keep fitting when the window is resized.
-
-### Capture only during meetings
-macOS shows its purple "recording" indicator whenever sharemask captures, and that cannot be
-hidden. By default (`"capture": "ask"`) sharemask therefore stays in **standby** and only captures
-when a meeting is detected:
-
-- **microphone in use** (CoreAudio "device is running somewhere", no permission needed; the app
-  using it is named on macOS 14.2+), or
-- **another app is capturing the screen** (private `CGSIsScreenWatcherPresent`, checked while our
-  own capture is off), or
-- optionally (`"calendarLookahead": true`, asks for Calendar access) an event with attendees or a
-  video-call link starting within 5 minutes.
-
-A floating prompt asks "Meeting detected — start sharemask proxy?"; `"capture": "auto"` starts
-without asking. When the mic goes quiet for 15 s sharemask pauses capture for half a second to
-check that nobody else is still capturing, then stops and says so. `"always"` captures whenever the
-proxy is running; `"manual"` only via the menu. The virtual display itself always exists while
-the app runs, so the "sharemask" display is always there to pick in Zoom/Meet.
-
-Launch flags: `--demo` adds a hard-coded pixellate rect at (100,100,400,300) px for testing;
-`--probe` runs the display diagnostics CLI.
-
-## Presets
-
-`~/.config/sharemask/presets.json` (seeded from `Resources/presets.example.json`):
-
-```json
-{
-  "version": 1,
-  "defaults": { "mode": "pixellate", "scale": 24 },
-  "apps": {
-    "net.whatsapp.WhatsApp": {
-      "regions": [
-        { "name": "chat list", "rect": [0.0, 0.0, 0.30, 1.0] },
-        { "name": "header",    "rect": [0.0, 0.0, 1.0, 0.08], "mode": "solid", "color": "#000000" }
-      ]
-    },
-    "com.tinyspeck.slackmacgap": {
-      "whenFrontmostOnly": false,
-      "regions": [ { "name": "sidebar", "rect": [0.0, 0.0, 0.22, 1.0], "mode": "blur", "radius": 30 } ]
-    }
-  },
-  "hotkeys": { "panic": "cmd+shift+ctrl+B", "toggle": "cmd+shift+ctrl+M", "pick": "cmd+shift+ctrl+P" },
-  "pointerGuard": true,
-  "hud": false,
-  "idleMode": false
-}
-```
-
-- `rules`: `[{ "name": "wa-web", "titleContains": "WhatsApp", "bundleID": "optional", "regions": [...] }]`
-  matches any window by title substring (web apps in a browser) and/or bundle ID.
-- `allowlist`: bundle IDs that stay visible in allowlist mode, e.g. `["com.apple.Keynote"]`.
-- `maskNotifications` (default true): black out macOS notification banners.
-- `rect` is `[x, y, w, h]` normalised to the window frame, origin top-left; `"shape": "ellipse"`
-  makes it an ellipse inside that box (kept only while nothing overlaps it, otherwise it falls back
-  to rectangles — over-redaction, never under).
-- Modes: `pixellate {scale}`, `blur {radius}`, `solid {color}`. Unknown bundle IDs are ignored.
-- A malformed file keeps the last good config and shows a warning in the menu.
-- `capture`: `ask` (default) · `auto` · `always` · `manual` — see "Capture only during meetings".
-- `calendarLookahead`: prompt before calendar meetings (needs Calendar access). Off by default.
-
-Occlusion is respected: if another window overlaps a masked region, the overlapping part is left
-sharp (a Terminal dragged over WhatsApp stays readable). Windows that are themselves hidden from
-capture (`sharingType = .none`, e.g. password managers) do **not** punch holes, because what is under
-them is what the feed shows. On any overflow (> 64 rects/frame) sharemask over-redacts, never under.
-
-## Layout
-
-```
-Sources/CGVirtualDisplayShim   ObjC: private CGVirtualDisplay* declarations + SM* façade (only private API here)
-Sources/CGSPrivate             ObjC: dlsym'd CGSIsScreenWatcherPresent (idle mode)
-Sources/sharemask
-  App.swift                    @main, launch order, NSApplicationDelegate
-  Probe.swift                  `--probe` CLI
-  Pipeline/                    Pipeline (lifecycle), Capture (SCStream), Redactor (Core Image),
-                               Presenter (CAMetalLayer on the virtual display), FrameClock, SourceDisplay
-  VirtualDisplay/              Swift owner of the virtual display + the measured invariants
-  Regions/                     Preset (schema), RegionResolver (pure geometry), WindowTracker, ConfigStore
-  Hotkeys/  Picker/  UI/       Carbon hotkeys, region picker, menu bar, HUD, pointer guard
-Tests/sharemaskTests           RegionResolver + preset tests (`swift test`)
-```
-
-Capture and output sit behind `FrameSource` / `FrameProcessor` / `FrameSink` protocols so another
-OS could swap them in; only macOS is implemented.
-
-## Virtual display invariants (measured, non-negotiable)
-
-Encoded in `VirtualDisplay.swift`; measured on macOS 27.0.1 with `make probe`:
-
-1. Every private class/selector is verified at launch (`objc_getClass` + `class_getInstanceMethod`).
-   A missing one shows an alert naming it and the pipeline refuses to start.
-2. The virtual display's mode is **never** changed after creation. A mode change (even from System
-   Settings) makes it un-removable until the process exits; the menu warns when that happened.
-3. One fixed identity: name `sharemask`, vendor `0x534D`, product `0x0001`, serial = FNV-1a of
-   `(name, w, h)`. macOS writes a root-owned ICC profile per identity under
-   `/Library/ColorSync/Profiles/Displays` and never deletes it; a stable identity means one file and
-   a stable arrangement across launches.
-4. Mode reporting (`CGDisplayCopyDisplayMode`) is NULL in the creating process if it enumerated
-   displays first, so the display is created before AppKit starts and diagnostics run in a child
-   process (`sharemask --probe <id>`). `CGDisplayBounds`/`CGDisplayPixelsWide` work regardless.
-5. Removal is asynchronous (measured 20–100 ms for one display); `release()` polls up to 5 s.
-6. The window server reclaims the display if the process dies; it is still released on quit.
-7. Created on demand (when capture starts), after AppKit has enumerated displays, so
-   `CGDisplayCopyDisplayMode` is NULL for it inside the app; nothing in the app needs it. Released
-   asynchronously from the main run loop: the process's display list only refreshes when the main
-   run loop turns, so a blocking poll on the main thread always times out.
-8. Created at the real display's pixel size with a ~110 DPI physical size, so macOS enters the
-   native 1× mode. With a Retina-like DPI it would come up at half size. Note that
-   `CGDisplayPixelsWide` returns *points* on Retina displays; the pixel size is read from the mode.
-
-## What sharemask stores
-
-- `~/.config/sharemask/presets.json`: masks, rules, shortcuts.
-- `~/Library/Logs/sharemask/`: logs (≤ ~10 MB).
-- Keychain item `dev.sharemask.applock`: App lock settings and the (hashed) sharemask password.
-- `~/Library/LaunchAgents/dev.sharemask.keepalive.plist`: only while App lock's relaunch option is on.
-
-## Network use
-
-sharemask makes exactly one kind of network request: once a day (and when you click "Check for
-updates now") it asks `api.github.com` for the latest release tag of this repo. Nothing about you or
-your screen is sent. Turn the daily check off under Settings ▸ Check for updates daily.
-
-## Logs
-
-Everything goes to `~/Library/Logs/sharemask/sharemask.log` (rotated at 5 MB, one previous file
-kept, so never more than ~10 MB on disk; the folder is pruned at launch), to the unified log
-(subsystem `dev.sharemask.app`, notice level) and to stderr when run from a terminal. Crashes write
-a final `[FATAL]` line; macOS crash reports are in `~/Library/Logs/DiagnosticReports`.
-
-## Performance
-
-`FrameClock` logs every 5 s (unified log, subsystem `dev.sharemask.app`, or stderr when run from a
-terminal) and the menu shows: fps, capture→present latency p50/p95, pipeline time, GPU time, drops.
-Targets: < 40 ms p95 capture→present, < 4 ms GPU per frame on Apple Silicon.
-Measured on an M-series MacBook at 2940×1912 (macOS 27.0.1): capture→present 4 ms p50 / 6–17 ms p95,
-pipeline 2.6 ms, GPU 1.3–1.5 ms. The fps figure follows screen activity: ScreenCaptureKit only
-delivers frames when content changes, so a static desktop reads ~8–10 fps and rises to 60 under motion.
-
-## Other platforms
-
-The resolver is also a platform-independent Rust crate (`core/`, `cargo test`), and
-[`docs/PORTING.md`](docs/PORTING.md) lays out what a Windows (IddCx + Windows.Graphics.Capture)
-and Linux (PipeWire + headless output) port needs. Only macOS is implemented.
-
-## Non-goals
-
-No virtual camera, no browser extension, no OCR/ML detection (geometric presets only), no
-per-window compositing, no App Store/notarisation.
+What's new: see the [releases](https://github.com/Larry8668/share-mask/releases).
