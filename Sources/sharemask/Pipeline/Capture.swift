@@ -27,6 +27,8 @@ final class Capture: NSObject, FrameSource, SCStreamOutput, SCStreamDelegate {
     private let queue = DispatchQueue(label: "sharemask.capture", qos: .userInteractive)
     private var stream: SCStream?
     private var onFrame: ((CVPixelBuffer, CMTime) -> Void)?
+    /// Called (capture queue) for frames with no new pixels: the stream is alive, nothing changed.
+    var onAlive: (() -> Void)?
     /// Invoked (on an arbitrary queue) when the stream stops on its own.
     var onStopped: ((Error?) -> Void)?
     var frameRate = 60
@@ -93,9 +95,12 @@ final class Capture: NSObject, FrameSource, SCStreamOutput, SCStreamDelegate {
         guard type == .screen, sampleBuffer.isValid,
               let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
               let statusRaw = attachments.first?[.status] as? Int,
-              let status = SCFrameStatus(rawValue: statusRaw), status == .complete,
-              let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer)
-        else { return }
+              let status = SCFrameStatus(rawValue: statusRaw) else { return }
+        // A screen that isn't changing gets "idle" frames (no new pixels) instead of complete ones.
+        // They still prove the stream is alive — ignoring them made the watchdog call a still
+        // screen a stall (false "capture stalled" alerts while sharing an idle external monitor).
+        if status == .idle || status == .blank { onAlive?(); return }
+        guard status == .complete, let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         onFrame?(pixelBuffer, CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
     }
 

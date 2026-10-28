@@ -269,7 +269,11 @@ final class Pipeline {
             guard let vd = self.virtualDisplay else { return (false, "", .zero, self.displaySpec) }
             let realIDs = DisplayLayout.realDisplays(excluding: vd.displayID)
             let real = realIDs.map { CGDisplayBounds($0) }
+            // Keyed by monitor setup AND proxy size: a different size is a different display identity
+            // to macOS, placed (and remembered) separately — sharing the external monitor after the
+            // built-in one put the proxy between the screens again because this key ignored size.
             let key = realIDs.map { "\(CGDisplayVendorNumber($0)):\(CGDisplayModelNumber($0)):\(CGDisplaySerialNumber($0))" }.sorted().joined(separator: "|")
+                + "@\(self.displaySpec.modeWidth)x\(self.displaySpec.modeHeight)"
             let ok = DisplayLayout.isWellPlaced(vd.bounds, real: real)
             if !ok { Log.warn("proxy display at \(vd.bounds) shares an edge with a real screen \(real)") }
             return (!ok, key, DisplayLayout.cornerOrigin(real: real), self.displaySpec)
@@ -410,26 +414,56 @@ final class Pipeline {
         watchdog = t
     }
 
+    /// Silence from ScreenCaptureKit is ambiguous: a screen that isn't changing gets no frames at
+    /// all after a few seconds. So the watchdog tests instead of guessing:
+    ///   no frames for `idleProbeAfter` → restart capture quietly (a fresh stream always delivers
+    ///   one frame at once) → frame arrives = alive, the screen is just still → nothing shown.
+    ///   no frame within `probeTimeout` of that restart = a real stall → black out + alert.
+    /// (0.2.7 alerted after 3 s of silence, which fired on every still external monitor.)
+    static let idleProbeAfter: Double = 10
+    static let probeTimeout: Double = 3
+    private var probingSince: Double?
+
     private func checkStall() {
-        guard state == .running, let cap = capture else { stalled = false; return }
+        guard state == .running else { stalled = false; probingSince = nil; return }
         lock.lock(); let last = lastFrameAt; lock.unlock()
-        let age = FrameClock.hostSeconds() - last
-        guard last > 0, age > stallTimeout, !stalled else { return }
-        stalled = true
-        let quiet = recentlyReconfigured
-        Log.error("watchdog: no frames for \(Int(age)) s — blacking out proxy and restarting capture\(quiet ? " (displays just changed: recovering silently)" : "")")
-        presentBlack()
+        let now = FrameClock.hostSeconds()
+        if let since = probingSince {
+            if last >= since { probingSince = nil; Log.info("watchdog: capture is alive (screen was just still)"); return }
+            guard now - since > Pipeline.probeTimeout, !stalled else { return }
+            realStall(age: now - last)
+            return
+        }
+        guard last > 0, now - last > Pipeline.idleProbeAfter, let cap = capture else { return }
+        probingSince = now
+        Log.info("watchdog: no new frames for \(Int(now - last)) s — restarting capture to check it's alive")
         capture = nil
         let gen = generation
         Task {
             await cap.stop()
             let still = await MainActor.run { gen == self.generation && self.captureWanted }
-            if still { await startCapture() } else { Log.info("watchdog restart dropped (plan changed)") }
+            if still { await startCapture() } else { await MainActor.run { self.probingSince = nil } }
+        }
+    }
+
+    private func realStall(age: Double) {
+        stalled = true
+        probingSince = nil
+        let quiet = recentlyReconfigured
+        Log.error("watchdog: capture restarted but still no frames (\(Int(age)) s) — blacking out proxy\(quiet ? " (displays just changed: recovering silently)" : "")")
+        presentBlack()
+        let cap = capture
+        capture = nil
+        let gen = generation
+        Task {
+            await cap?.stop()
+            let still = await MainActor.run { gen == self.generation && self.captureWanted }
+            if still { await startCapture() }
             await MainActor.run { self.stalled = false }
         }
-        // macOS pauses capture for a few seconds whenever displays reconfigure; that's expected and
-        // recovers on its own, so only a stall with no display change is worth an alert.
-        if !quiet { onStall?("Capture stalled for \(Int(age)) s; proxy blacked out and capture restarted") }
+        // macOS pauses capture for a few seconds whenever displays reconfigure; that recovers on
+        // its own, so only a stall with no display change is worth an alert.
+        if !quiet { onStall?("Capture stopped delivering frames for \(Int(age)) s; the shared feed is blacked out while it restarts") }
     }
 
     /// Emergency stop: stop capture, black the proxy, and remove the virtual display. Meeting apps
@@ -480,6 +514,10 @@ final class Pipeline {
         await ensureGoodPlacement()
         guard await MainActor.run(body: { self.virtualDisplay != nil || self.presenter != nil }) else { return }
         let cap = Capture(displayID: source.id, pixelSize: source.geometry.pixelSize)
+        cap.onAlive = { [weak self] in
+            guard let self = self else { return }
+            self.lock.lock(); self.lastFrameAt = FrameClock.hostSeconds(); self.lock.unlock()
+        }
         cap.onStopped = { [weak self] error in
             guard let self = self else { return }
             DispatchQueue.main.async { self.handleStreamStopped(error) }
