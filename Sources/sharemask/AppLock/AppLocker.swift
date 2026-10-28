@@ -58,7 +58,7 @@ final class AppLocker {
         observers.append(DistributedNotificationCenter.default().addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
             if self?.config.relockOnSleep == true { self?.lockAll(reason: "screen locked") }
         })
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.enforce() }
+        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.enforce() }
         enforce()   // first thing after (re)launch: re-hide anything locked
     }
 
@@ -79,14 +79,69 @@ final class AppLocker {
         Log.info("app lock: relocking all (\(reason)): \(unlocked.keys.sorted())")
         unlocked.removeAll()
         hadWindow.removeAll()
+        for b in Array(axObservers.keys) { unobserve(b) }
         enforce()
         onChange?()
+    }
+
+    // MARK: Reopen detection
+    //
+    // Clicking the Dock icon of an app that is still frontmost (its window was just closed) sends no
+    // "activated" notification — the app simply opens a new window. So watch for window creation
+    // via an Accessibility observer (instant), backed by the 0.25 s window-count poll.
+
+    private var axObservers: [String: AXObserver] = [:]
+
+    private func shouldRelockOnReopen(_ b: String, closedSince: Date) -> Bool {
+        guard unlocked[b] != nil, hadWindow.contains(b), !inGrace(b), config.closeDelay >= 0 else { return false }
+        return config.closeDelay == 0 || Date().timeIntervalSince(closedSince) >= Double(config.closeDelay)
+    }
+
+    private func relockReopened(_ app: NSRunningApplication, _ b: String, via: String) {
+        relock(b, reason: "reopened after its window was closed (\(via))")
+        hide(app)
+        promptUnlock(app)
+    }
+
+    /// Called from the AX observer when the app creates a window.
+    fileprivate func windowCreated(pid: pid_t) {
+        guard let app = NSRunningApplication(processIdentifier: pid), let b = app.bundleIdentifier, unlocked[b] != nil else { return }
+        // Was it at zero windows (closed) just before this window appeared?
+        let wasClosed = zeroSince[b] != nil || lastWindowCount[b] == 0
+        Log.info("app lock: \(b) created a window (was closed: \(wasClosed))")
+        if wasClosed, shouldRelockOnReopen(b, closedSince: zeroSince[b] ?? .distantPast) {
+            relockReopened(app, b, via: "window created")
+        }
+    }
+
+    private func observe(_ app: NSRunningApplication, _ b: String) {
+        guard axObservers[b] == nil, AXIsProcessTrusted() else { return }
+        var obs: AXObserver?
+        guard AXObserverCreate(app.processIdentifier, appLockAXCallback, &obs) == .success, let o = obs else { return }
+        let el = AXUIElementCreateApplication(app.processIdentifier)
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        AXObserverAddNotification(o, el, kAXWindowCreatedNotification as CFString, refcon)
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .defaultMode)
+        axObservers[b] = o
+    }
+
+    private func unobserve(_ b: String) {
+        guard let o = axObservers.removeValue(forKey: b) else { return }
+        CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(o), .defaultMode)
+    }
+
+    /// Lock one app now (from the app window's "Lock now").
+    func lockNow(_ b: String) {
+        guard unlocked[b] != nil else { return }
+        relock(b, reason: "Lock now")
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: b).first { hide(app) }
     }
 
     private func relock(_ b: String, reason: String) {
         guard unlocked[b] != nil else { return }
         unlocked[b] = nil
         hadWindow.remove(b)
+        unobserve(b)
         zeroSince[b] = nil
         lastWindowCount[b] = nil
         Log.info("app lock: \(b) relocked (\(reason))")
@@ -155,7 +210,13 @@ final class AppLocker {
                     Log.info("app lock: \(b) windows \(lastWindowCount[b].map(String.init) ?? "?") → \(n)\(app.isHidden ? " (hidden)" : "")")
                     lastWindowCount[b] = n
                 }
-                if n > 0 { hadWindow.insert(b); zeroSince[b] = nil }
+                if n > 0 {
+                    if let since = zeroSince[b], shouldRelockOnReopen(b, closedSince: since) {
+                        relockReopened(app, b, via: "window list")
+                        continue
+                    }
+                    hadWindow.insert(b); zeroSince[b] = nil
+                }
                 else if hadWindow.contains(b) && !app.isHidden && !inGrace(b) && config.closeDelay >= 0 {
                     let since = zeroSince[b] ?? Date()
                     zeroSince[b] = since
@@ -191,6 +252,7 @@ final class AppLocker {
             self.unlocked[b] = Date()
             self.unlockedAt[b] = Date()
             self.hadWindow.remove(b)
+            self.observe(app, b)
             Log.info("app lock: unlocked \(b)")
             app.unhide()
             app.activate()
@@ -211,4 +273,13 @@ final class AppLocker {
             if ok { action() }
         }
     }
+}
+
+/// C callback for the Accessibility observer (window created in an unlocked app).
+private func appLockAXCallback(_ observer: AXObserver, _ element: AXUIElement, _ notification: CFString, _ refcon: UnsafeMutableRawPointer?) {
+    guard let refcon = refcon else { return }
+    let locker = Unmanaged<AppLocker>.fromOpaque(refcon).takeUnretainedValue()
+    var pid: pid_t = 0
+    AXUIElementGetPid(element, &pid)
+    DispatchQueue.main.async { locker.windowCreated(pid: pid) }
 }

@@ -112,9 +112,9 @@ struct MainView: View {
             footer
         }
         .padding(.horizontal, 22)
-        .padding(.top, 30)
+        .padding(.top, 12)
         .padding(.bottom, 14)
-        .frame(width: 820, height: 500, alignment: .top)
+        .frame(width: 820, height: 470, alignment: .top)
         .background(VisualEffect().ignoresSafeArea())
     }
 
@@ -193,34 +193,60 @@ struct MainView: View {
         }
     }
 
-    // App lock
+    // App lock — one row per app with a clear lock switch (clicking icons used to remove the lock).
     private var lockCard: some View {
         Card(title: "App lock", symbol: "lock.fill", tint: .green,
              trailing: AnyView(Toggle("", isOn: Binding(get: { model.lockOn }, set: { _ in model.actions.toggleLock() }))
-                .toggleStyle(.switch).controlSize(.small).labelsHidden())) {
+                .toggleStyle(.switch).controlSize(.small).labelsHidden().help(model.lockOn ? "App lock is on" : "App lock is off"))) {
             let locked = model.lockApps.filter { $0.on }
             if locked.isEmpty {
-                emptyState("Nothing locked", "Hide apps behind Touch ID.", "lock.open")
+                emptyState("Nothing locked", "Add an app to hide it behind Touch ID.", "lock.open")
             } else {
-                LazyVGrid(columns: Array(repeating: GridItem(.fixed(48), spacing: 10), count: 4), spacing: 10) {
-                    ForEach(locked) { app in
-                        Button { model.actions.toggleLockApp(app.id) } label: {
-                            ZStack(alignment: .bottomTrailing) {
-                                AppIcon(bundleID: app.id, size: 40)
-                                Image(systemName: app.detail == "unlocked" ? "lock.open.fill" : "lock.fill")
-                                    .font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
-                                    .padding(4).background(Circle().fill(app.detail == "unlocked" ? Color.orange : Color.green))
-                                    .offset(x: 4, y: 4)
+                ScrollView {
+                    VStack(spacing: 6) {
+                        ForEach(locked) { app in
+                            let open = app.detail == "unlocked"
+                            HStack(spacing: 8) {
+                                ZStack(alignment: .bottomTrailing) {
+                                    AppIcon(bundleID: app.id, size: 24)
+                                    Image(systemName: open ? "lock.open.fill" : "lock.fill")
+                                        .font(.system(size: 7, weight: .bold)).foregroundStyle(.white)
+                                        .padding(2.5).background(Circle().fill(open ? Color.orange : Color.green))
+                                        .offset(x: 3, y: 3)
+                                }
+                                VStack(alignment: .leading, spacing: 0) {
+                                    Text(app.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                                    Text(open ? "Unlocked now" : "Locked")
+                                        .font(.system(size: 10)).foregroundStyle(open ? .orange : .secondary)
+                                }
+                                Spacer()
+                                if open {
+                                    Button("Lock now") { model.actions.lockNow(app.id) }
+                                        .controlSize(.mini).buttonStyle(.bordered)
+                                }
+                                Toggle("", isOn: Binding(get: { true }, set: { _ in model.actions.toggleLockApp(app.id) }))
+                                    .toggleStyle(.switch).controlSize(.mini).labelsHidden()
+                                    .help("Turn off to stop locking \(app.name) (asks for Touch ID)")
                             }
+                            .opacity(model.lockOn ? 1 : 0.45)
+                            .transition(.move(edge: .top).combined(with: .opacity))
                         }
-                        .buttonStyle(.plain)
-                        .help("\(app.name)\(app.detail == "unlocked" ? " (unlocked now)" : "") — click to stop locking")
-                        .opacity(model.lockOn ? 1 : 0.45)
                     }
+                    .animation(.spring(response: 0.35, dampingFraction: 0.8), value: locked)
                 }
             }
             HStack {
-                addAppMenu("Lock an app") { model.actions.toggleLockApp($0) }
+                Menu {
+                    let candidates = model.runningApps.filter { a in !locked.contains { $0.id == a.id } }
+                    if !candidates.isEmpty {
+                        Section("Running apps") {
+                            ForEach(candidates) { a in Button { model.actions.toggleLockApp(a.id) } label: { Text(a.name) } }
+                        }
+                    }
+                    Divider()
+                    Button("Choose from Applications…") { model.actions.chooseAppToLock() }
+                } label: { Label("Add an app", systemImage: "plus") }
+                .menuStyle(.borderlessButton).fixedSize().font(.system(size: 12))
                 Spacer()
                 Menu {
                     ForEach(AppModel.closeDelayChoices, id: \.0) { c in
@@ -229,7 +255,7 @@ struct MainView: View {
                         }
                     }
                 } label: {
-                    Label("On close: \(AppModel.closeDelayChoices.first { $0.0 == model.lockCloseDelay }?.1.lowercased() ?? "instantly")",
+                    Label("Lock on close: \(AppModel.closeDelayChoices.first { $0.0 == model.lockCloseDelay }?.1.lowercased() ?? "instantly")",
                           systemImage: "xmark.circle")
                 }
                 .menuStyle(.borderlessButton).fixedSize().font(.system(size: 11))
@@ -331,7 +357,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
             w.isMovableByWindowBackground = true
             w.isReleasedWhenClosed = false
             w.delegate = self
-            w.setContentSize(NSSize(width: 820, height: 500))
+            w.setContentSize(NSSize(width: 820, height: 470))
             w.center()
             window = w
         }
