@@ -55,10 +55,26 @@ a session starts; ⌃⌥K shows it again.
 | ⌃⌥0 | Re-enable every mask |
 | ⌃⌥A | Allowlist mode on / off |
 | ⌃⌥X | End share / stop presenting |
+| ⌃⌥S | Pick the “sharemask” screen in macOS’s share picker (see below) |
 | ⌃⌥K | Show the key card |
 
 The ⌃⇧⌘ shortcuts (panic, toggle, pick, reveal, allowlist, end share) stay active all the time and
 can be remapped under Settings ▸ Shortcuts.
+
+## Choosing the sharemask screen in your call
+
+Start sharemask first (accept its prompt or press Start): the “sharemask” screen only exists while
+it's capturing. Then, in your call's share dialog:
+
+| Your call runs in | What you see | What to pick |
+|---|---|---|
+| Chrome, Arc, Edge, Brave; Zoom, Teams, Slack apps | A list of screens with thumbnails | The screen that isn't yours. Lists that number screens show it as “Screen 2” (or “Screen 3” with a second monitor); the sharemask window shows the exact number while you're live. |
+| Firefox, Zen and other Firefox-based browsers, or any app using macOS's own picker | macOS's own picker: a bar across the top of every screen saying “click a screen to share” | You can't click the sharemask screen, because it's invisible. sharemask notices the picker and shows a hint: **press ⌃⌥S** and it picks the sharemask screen for you. This needs Accessibility. |
+
+There's no need to change browser settings. (In Firefox and Zen you *can* switch to the browser's
+own list by setting `media.getdisplaymedia.screencapturekit.picker.enabled` to false in
+`about:config`. That list also needs Zen/Firefox to have Screen Recording permission to show other
+apps' windows. ⌃⌥S makes this unnecessary.)
 
 ## Region editor
 A transparent overlay sits exactly over the app's window (and follows it if it moves). Drag on

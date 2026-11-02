@@ -66,7 +66,8 @@ notarised). To build it yourself, see [Building from source](docs/BUILDING.md).
 2. **Choose what to hide**: in the sharemask window, Masks ▸ **Add an app**, draw boxes over the
    private parts, Save.
 3. **Join a call.** sharemask asks to start; then, in your call app, share the screen called
-   **sharemask**. Viewers see the masked version; you see everything.
+   **sharemask** (in Firefox or Zen, press ⌃⌥S when the picker appears). Viewers see the
+   masked version; you see everything.
 4. **Lock apps** (optional): App lock ▸ **Add an app**. The next time someone opens it, it asks for
    Touch ID.
 
