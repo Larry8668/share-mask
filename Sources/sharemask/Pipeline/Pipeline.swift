@@ -716,6 +716,8 @@ final class Pipeline {
         if preview { DispatchQueue.main.async { self.onPreview?(image) } }
     }
 
+    func regionsForTesting() -> [PixelRegion] { currentRegions() }
+
     private func currentRegions() -> [PixelRegion] {
         lock.lock()
         let cfg = _config, enabled = _regionsEnabled, demo = _demoRegions

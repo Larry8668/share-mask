@@ -50,7 +50,8 @@ a session starts; ⌃⌥K shows it again.
 |---|---|
 | ⌃⌥B | Panic: pixellate everything / restore |
 | ⌃⌥M | All per-app masks off / on |
-| ⌃⌥R (hold) | Reveal the frontmost app while held |
+| ⌃⌥R (hold) | Reveal the frontmost app while held (a locked app keeps its drawn masks) |
+| ⌃⌥⇧R (hold) | Reveal the frontmost app completely while held |
 | ⌃⌥1 … ⌃⌥9 | Unmask / re-mask app #1–9 (numbered in Masks ▸) |
 | ⌃⌥0 | Re-enable every mask |
 | ⌃⌥A | Allowlist mode on / off |
@@ -69,7 +70,7 @@ it's capturing. Then, in your call's share dialog:
 | Your call runs in | What you see | What to pick |
 |---|---|---|
 | Chrome, Arc, Edge, Brave; Zoom, Teams, Slack apps | A list of screens with thumbnails | The screen that isn't yours. Lists that number screens show it as “Screen 2” (or “Screen 3” with a second monitor); the sharemask window shows the exact number while you're live. |
-| Firefox, Zen and other Firefox-based browsers, or any app using macOS's own picker | macOS's own picker: a bar across the top of every screen saying “click a screen to share” | You can't click the sharemask screen, because it's invisible. sharemask notices the picker and shows a hint: **press ⌃⌥S** and it picks the sharemask screen for you. This needs Accessibility. |
+| Safari, Firefox, Zen and other Firefox-based browsers (any app using macOS's own picker) | macOS's own picker: a bar across the top of every screen saying “click a screen to share” | You can't click the sharemask screen, because it's invisible. Choose **Share entire screen** first; sharemask then shows a hint: **press ⌃⌥S** and it picks the sharemask screen for you. This needs Accessibility. |
 
 There's no need to change browser settings. (In Firefox and Zen you *can* switch to the browser's
 own list by setting `media.getdisplaymedia.screencapturekit.picker.enabled` to false in
@@ -110,7 +111,14 @@ Launch flags: `--demo` adds a hard-coded pixellate rect at (100,100,400,300) px 
 
 Panic (⌃⌥B) blurs everything and wins over every other setting: while it's on, hold-to-reveal (⌃⌥R)
 does nothing and sharemask says so. Turn panic off first. Apps you've locked with App lock are
-blurred whole in shares; reveal shows them like any other app.
+blurred whole in shares.
+
+Reveal lifts one layer at a time:
+
+- **⌃⌥R (hold)** on a locked app (or, in allowlist mode, an app that isn't allowed) lifts only the
+  whole-window blur. The regions you drew for it stay masked: for WhatsApp, the chat opens up while
+  the chat list and top bar stay blurred. On any other app it reveals the drawn regions as before.
+- **⌃⌥⇧R (hold)** shows the front app completely.
 
 ## Notification banners while sharing
 

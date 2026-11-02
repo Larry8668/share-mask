@@ -30,7 +30,8 @@ watching**. Your own screen stays exactly as it is.
 ![Your screen stays untouched; the call sees the chat list pixellated](docs/demo.png)
 
 - **Draw what to hide** right on top of any app: rectangles, squares, circles. Masks follow the window.
-- **Panic key** (⌃⌥B) pixellates everything instantly; **hold ⌃⌥R** to reveal an app for a moment.
+- **Panic key** (⌃⌥B) pixellates everything instantly; **hold ⌃⌥R** to reveal an app for a moment
+  (a locked app keeps its drawn masks; ⌃⌥⇧R shows everything).
 - **Present in a room** over HDMI or AirPlay with the same masks.
 - Starts by itself when a call begins, and stays out of the way otherwise.
 
@@ -66,7 +67,7 @@ notarised). To build it yourself, see [Building from source](docs/BUILDING.md).
 2. **Choose what to hide**: in the sharemask window, Masks ▸ **Add an app**, draw boxes over the
    private parts, Save.
 3. **Join a call.** sharemask asks to start; then, in your call app, share the screen called
-   **sharemask** (in Firefox or Zen, press ⌃⌥S when the picker appears). Viewers see the
+   **sharemask** (in Safari, Firefox or Zen: choose "Share entire screen", then press ⌃⌥S). Viewers see the
    masked version; you see everything.
 4. **Lock apps** (optional): App lock ▸ **Add an app**. The next time someone opens it, it asks for
    Touch ID.
