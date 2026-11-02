@@ -169,7 +169,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         syncNotificationCovers()
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
-            if let a = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, a.bundleIdentifier != Bundle.main.bundleIdentifier { self?.lastOtherFront = a }
+            if let a = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, a.bundleIdentifier != Bundle.main.bundleIdentifier {
+                self?.lastOtherFront = a
+            }
         }
         if CommandLine.arguments.contains("--no-auto-touchid") { locker.card.autoPrompt = false }   // tests
         if handOverToKeepAliveIfNeeded() { return }
@@ -480,36 +482,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Masks / reveal / allowlist / end share / preview
 
-    /// Hold-to-reveal, one layer at a time. ⌃⌥R on an app under a whole-window blur (App lock, or
-    /// not on the allowlist in allowlist mode) lifts just that blur: its drawn regions stay masked.
-    /// On any other app, or with `all` (⌃⌥⇧R), the frontmost app is shown unmasked.
+    /// Reveal, one layer at a time: on an app under a whole-window blur (App lock, or not on the
+    /// allowlist in allowlist mode) it lifts just that blur and the drawn regions stay masked; on any
+    /// other app it shows the drawn regions too. `all` (⌃⌥⇧R) always shows the app completely.
+    ///
+    /// Two sources: ⌃⌥R toggles apps on/off (kept until the share ends, across app switches), and a
+    /// held key (⌃⌥⇧R, or the remappable global reveal key) shows the front app while held.
+    private var revealToggled: Set<String> = []
+    private var revealHeld: (bundleID: String, all: Bool)?
+    private let revealNote = PromptPanel()
+
+    private func panicBlocksReveal() -> Bool {
+        guard pipeline?.panic == true else { return false }
+        // Panic deliberately wins over everything; say so instead of silently doing nothing.
+        Log.info("reveal ignored: panic is on")
+        alerts.show(title: "Panic is on", detail: "Everything stays blurred. Press ⌃⌥B to turn panic off, then reveal again.",
+                    primary: "OK", secondary: "Turn panic off", timeout: 4,
+                    onPrimary: {}, onSecondary: { [weak self] in self?.togglePanic() })
+        return true
+    }
+
+    private func isBlanketed(_ bundleID: String) -> Bool {
+        effectiveOptions.forceMasked.contains(bundleID)
+            || (options.allowlistMode && !config.config.allowlist.contains(bundleID))
+    }
+
+    /// Hold-to-reveal (press/release).
     private func setReveal(_ on: Bool, all: Bool = false) {
-        guard let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return }
-        if on, pipeline?.panic == true {
-            // Panic deliberately wins over everything; say so instead of silently doing nothing.
-            Log.info("reveal ignored: panic is on")
-            alerts.show(title: "Panic is on", detail: "Everything stays blurred. Press ⌃⌥B to turn panic off, then hold ⌃⌥R to reveal.",
-                        primary: "OK", secondary: "Turn panic off", timeout: 4,
-                        onPrimary: {}, onSecondary: { [weak self] in self?.togglePanic() })
-            return
-        }
         if on {
-            let blanketed = effectiveOptions.forceMasked.contains(front)
-                || (options.allowlistMode && !config.config.allowlist.contains(front))
-            if blanketed && !all {
-                options.peeked.insert(front)
-                Log.info("reveal ON for \(front): whole-window blur lifted, drawn regions stay")
-            } else {
-                options.revealed.insert(front)
-                Log.info("reveal ON for \(front)\(all ? " (everything)" : "")")
-            }
+            guard let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier, !panicBlocksReveal() else { return }
+            revealHeld = (front, all)
+            Log.info("reveal held for \(front)\(all ? " (everything)" : "")")
         } else {
-            guard !options.revealed.isEmpty || !options.peeked.isEmpty else { return }
-            options.revealed.removeAll()
-        options.peeked.removeAll()
-            options.peeked.removeAll()
-            Log.info("reveal off")
+            guard revealHeld != nil else { return }
+            revealHeld = nil
+            Log.info("reveal hold released")
         }
+        applyReveal()
+    }
+
+    /// ⌃⌥R: reveal the front app, or hide it again if it's already revealed.
+    private func toggleReveal(for bundleID: String? = nil) {
+        guard let front = bundleID ?? NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return }
+        if revealToggled.contains(front) {
+            revealToggled.remove(front)
+            Log.info("reveal toggle off for \(front)")
+        } else {
+            guard !panicBlocksReveal() else { return }
+            revealToggled.insert(front)
+            Log.info("reveal toggle on for \(front)\(isBlanketed(front) ? ": whole-window blur lifted, drawn regions stay" : "")")
+        }
+        applyReveal()
+    }
+
+    /// End of the share: everything hidden again.
+    private func clearReveal() {
+        guard !revealToggled.isEmpty || revealHeld != nil else { return }
+        revealToggled.removeAll(); revealHeld = nil
+        Log.info("reveal off (share ended)")
+        applyReveal()
+    }
+
+    private func applyReveal() {
+        var peeked = Set<String>(), revealed = Set<String>()
+        for b in revealToggled { if isBlanketed(b) { peeked.insert(b) } else { revealed.insert(b) } }
+        if let h = revealHeld {
+            if h.all || !isBlanketed(h.bundleID) { revealed.insert(h.bundleID); peeked.remove(h.bundleID) } else { peeked.insert(h.bundleID) }
+        }
+        if options.peeked != peeked || options.revealed != revealed {
+            options.peeked = peeked
+            options.revealed = revealed
+        }
+        // A note on the real screen (never shared) while anything is toggled on.
+        if revealToggled.isEmpty { revealNote.dismiss(); return }
+        let names = revealToggled.sorted().map { b in NSRunningApplication.runningApplications(withBundleIdentifier: b).first?.localizedName ?? b }
+        let partial = revealToggled.contains { isBlanketed($0) }
+        revealNote.show(title: "Revealing \(names.joined(separator: ", "))",
+                        detail: (partial ? "Drawn masks stay on. " : "") + "⌃⌥R in the app hides it again; everything hides when the share ends.",
+                        primary: "", secondary: "", timeout: 6 * 3600, topOffset: 12, icon: "eye", on: pipeline?.source.id,
+                        onPrimary: {}, onSecondary: {})
     }
 
     private func toggleMask(_ key: String) {
@@ -927,7 +978,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if m.updateAvailable != upd { m.updateAvailable = upd }
         if CommandLine.arguments.contains("--demo-model") { applyDemoModel(); return }   // README screenshots
         if m.keys.isEmpty {
-            m.keys = [("⌃⌥B", "panic"), ("⌃⌥R", "hold to reveal"), ("⌃⌥M", "masks on/off"), ("⌃⇧⌘L", "lock apps")]
+            m.keys = [("⌃⌥B", "panic"), ("⌃⌥R", "reveal on/off"), ("⌃⌥M", "masks on/off"), ("⌃⇧⌘L", "lock apps")]
         }
     }
 
@@ -946,7 +997,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.screens = [.init(id: 99, name: "Living Room TV (AirPlay)")]
         m.presentingTo = nil
         m.version = UpdateChecker.currentVersion
-        m.keys = [("⌃⌥B", "panic"), ("⌃⌥R", "hold to reveal"), ("⌃⌥M", "masks on/off"), ("⌃⇧⌘L", "lock apps")]
+        m.keys = [("⌃⌥B", "panic"), ("⌃⌥R", "reveal on/off"), ("⌃⌥M", "masks on/off"), ("⌃⇧⌘L", "lock apps")]
     }
 
     /// Opened by the user (Finder, Launchpad, Dock) → show the window. Not at login, not when
@@ -1305,9 +1356,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let main = DispatchQueue.main
             hotkeys.set(.sPanic, combo: "ctrl+alt+B") { [weak self] in main.async { self?.togglePanic() } }
             hotkeys.set(.sToggle, combo: "ctrl+alt+M") { [weak self] in main.async { self?.toggleRegions() } }
-            hotkeys.set(.sReveal, combo: "ctrl+alt+R",
-                        handler: { [weak self] in main.async { self?.setReveal(true) } },
-                        onRelease: { [weak self] in main.async { self?.setReveal(false) } })
+            hotkeys.set(.sReveal, combo: "ctrl+alt+R") { [weak self] in main.async { self?.toggleReveal() } }
             hotkeys.set(.sRevealAll, combo: "ctrl+alt+shift+R",
                         handler: { [weak self] in main.async { self?.setReveal(true, all: true) } },
                         onRelease: { [weak self] in main.async { self?.setReveal(false) } })
@@ -1327,6 +1376,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } else {
             Hotkeys.Action.session.forEach { hotkeys.unregister($0) }
+            clearReveal()
             Log.info("session keys off")
         }
     }
@@ -1342,7 +1392,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func reenableAllMasks() {
         options.disabled.removeAll()
-        options.revealed.removeAll()
+        revealToggled.removeAll(); revealHeld = nil
+        applyReveal()
         Log.info("all masks re-enabled")
     }
 
@@ -1563,7 +1614,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let wins = p.tracker.latest.windows.filter { $0.bundleID == AppDelegate.testAppID && $0.isNormalVisible }
             let regs = p.regionsForTesting()
             let win = wins.first.map { "\(Int($0.boundsPoints.width * p.source.geometry.scale))x\(Int($0.boundsPoints.height * p.source.geometry.scale))" } ?? "none"
-            Log.info("script: regions on screen (test app window \(win) px): \(regs.map { "\(Int($0.rect.width))x\(Int($0.rect.height))" })")
+            Log.info("script: regions on screen (test app window \(win) px): \(regs.map { "\(Int($0.rect.width))x\(Int($0.rect.height))" }) peeked=\(options.peeked.sorted()) revealed=\(options.revealed.sorted()) note=\(revealNote.isVisible)")
+        case "toggle-reveal-test-app": toggleReveal(for: AppDelegate.testAppID)   // test: ⌃⌥R as if it were in front
+        case "toggle-reveal-finder": toggleReveal(for: "com.apple.finder")
         case "activate-test-app": NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first?.activate()
         case "reveal-down", "reveal-up", "reveal-all-down", "reveal-all-up":   // test: real ⌃⌥R / ⌃⌥⇧R presses
             let src = CGEventSource(stateID: .hidSystemState)
