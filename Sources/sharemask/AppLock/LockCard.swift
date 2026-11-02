@@ -18,6 +18,7 @@ final class LockCard: NSObject, NSTextFieldDelegate {
     var autoPrompt = true
     private(set) var subject: String?           // bundle ID or a purpose key ("quit", "settings")
     var config: () -> AppLockConfig = { AppLockConfig() }
+    var checkPassword: (String) -> AppLocker.PasswordCheck = { _ in .unavailable }
     var isVisible: Bool { panel?.isVisible ?? false }
 
     /// - subject: what this card is for (one card at a time; a new request replaces the old one).
@@ -33,7 +34,7 @@ final class LockCard: NSObject, NSTextFieldDelegate {
         self.subject = subject
         onResult = completion
         let cfg = config()
-        let hasCustom = cfg.passwordHash != nil
+        let hasCustom = cfg.hasPassword
         let width: CGFloat = 360, height: CGFloat = hasCustom ? 268 : 214
 
         let p = KeyPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
@@ -124,10 +125,15 @@ final class LockCard: NSObject, NSTextFieldDelegate {
 
     @objc private func customAuth() {
         guard let f = field else { return }
-        if Authenticator.customPassword(f.stringValue, config: config()) {
+        switch checkPassword(f.stringValue) {
+        case .ok:
             Log.info("lock card \(subject ?? "?"): unlocked via sharemask password")
             close(result: true)
-        } else {
+        case .unavailable:
+            // Keychain access denied: Touch ID / the Mac password still work; ⏎ again asks again.
+            errorLabel?.stringValue = "Keychain access denied: press ⏎ to ask again, or use Touch ID"
+            errorLabel?.toolTip = errorLabel?.stringValue
+        case .wrong:
             f.stringValue = ""
             errorLabel?.stringValue = "Wrong password"
             Log.warn("lock card: wrong sharemask password for \(subject ?? "?")")

@@ -6,7 +6,8 @@ What sharemask stores, what it sends, and where its logs are.
 
 - `~/.config/sharemask/presets.json`: masks, rules, shortcuts.
 - `~/Library/Logs/sharemask/`: logs (≤ ~10 MB).
-- Keychain item `dev.sharemask.applock`: App lock settings and the (hashed) sharemask password.
+- `~/.config/sharemask/applock.json`: App lock's list of apps and settings (no secrets).
+- Keychain item `dev.sharemask.applock` / `password`: the hashed sharemask password, only if you set one.
 - `~/Library/LaunchAgents/dev.sharemask.keepalive.plist`: only while App lock's relaunch option is on.
 
 ## Network use

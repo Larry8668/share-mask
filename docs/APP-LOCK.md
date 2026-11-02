@@ -11,7 +11,7 @@ Lock apps on your own screen, so someone using your unlocked Mac can't open them
 - **App lock ▸ Apps to lock**: tick apps. A locked app stays hidden; opening it (Dock, ⌘-Tab,
   Spotlight) shows a lock card and the **Touch ID prompt starts by itself**. Your **Mac login
   password** always works too (so you can't lock yourself out); an optional **sharemask password**
-  can be typed on the card instead.
+  can be typed on the card instead. Set, change or remove it under **Password** in the App lock card.
 - **When it asks again** (relocks):
 
   | You… | Asks again? |
@@ -45,8 +45,20 @@ Lock apps on your own screen, so someone using your unlocked Mac can't open them
 - **Relaunch if force-quit**: a per-user login agent (`~/Library/LaunchAgents/dev.sharemask.keepalive.plist`,
   no admin rights) brings sharemask back about a second after a Force Quit or `kill`, and it re-hides
   locked apps first. An authenticated Quit stays quit.
-- Changing any App lock setting (except making it stricter) asks for authentication. Settings live
-  in your Keychain, not in presets.json, so they can't be edited around.
+- Changing any App lock setting (except making it stricter) asks for authentication.
+
+### Where it's stored, and Keychain prompts
+
+- The list of locked apps and their settings: `~/.config/sharemask/applock.json` (readable only by
+  you). Someone using your unlocked Mac *could* edit it with Terminal, but they could just as well
+  stop sharemask, so the Keychain added little here, and the list is always visible in the window.
+- The sharemask password (as a salted PBKDF2 hash): your login keychain. sharemask reads it only when
+  you type the password on a lock card. Because sharemask is self-signed, macOS treats every update
+  as a new app and may ask you to allow access the first time after an update. Choose
+  **Always Allow**. If you choose Deny, Touch ID and your Mac password still work; press ⏎ on the
+  card to be asked again.
+- Updating from 0.2.12 or earlier moves your settings out of the Keychain once (one last prompt).
+  If that's denied, the App lock card says it's waiting, with **Try again**; nothing is lost.
 - Locked apps are also masked whole-window in screen shares and presentations. Press ⌃⌥R to
   show one without the whole-window blur until the share ends (the regions you drew for it stay masked), or ⌃⌥⇧R to show
   it completely.

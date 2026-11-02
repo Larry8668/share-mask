@@ -202,7 +202,18 @@ struct MainView: View {
              trailing: AnyView(Toggle("", isOn: Binding(get: { model.lockOn }, set: { _ in model.actions.toggleLock() }))
                 .toggleStyle(.switch).controlSize(.small).labelsHidden().help(model.lockOn ? "App lock is on" : "App lock is off"))) {
             let locked = model.lockApps.filter { $0.on }
-            if locked.isEmpty {
+            if model.lockSettingsUnreadable {
+                // Shown instead of the list: the saved apps aren't known until the Keychain allows reading them.
+                VStack(spacing: 8) {
+                    Image(systemName: "key.slash").font(.system(size: 24)).foregroundStyle(.orange)
+                    Text("Waiting for Keychain access").font(.system(size: 13, weight: .semibold))
+                    Text("Your App lock settings move out of the Keychain once after updating. Allow access when macOS asks.")
+                        .font(.system(size: 11)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Try again") { model.actions.retryLockSettings() }.controlSize(.small)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if locked.isEmpty {
                 emptyState("Nothing locked", "Add an app to hide it behind Touch ID.", "lock.open")
             } else {
                 ScrollView {
@@ -247,6 +258,15 @@ struct MainView: View {
                 } label: { Label("Defaults", systemImage: "slider.horizontal.3") }
                 .menuStyle(.borderlessButton).fixedSize().font(.system(size: 11))
                 .help("Settings new apps start with. Click an app above to change its own settings.")
+                Menu {
+                    Section("An extra password for lock cards, besides Touch ID and your Mac password") {
+                        Button(model.lockHasPassword ? "Change password…" : "Set a password…") { model.actions.setLockPassword() }
+                        if model.lockHasPassword { Button("Remove password…") { model.actions.removeLockPassword() } }
+                    }
+                    Section("Kept in your login keychain: macOS may ask to allow sharemask access, e.g. after an update") {}
+                } label: { Label(model.lockHasPassword ? "Password ✓" : "Password", systemImage: "key") }
+                .menuStyle(.borderlessButton).fixedSize().font(.system(size: 11))
+                .help("Optional sharemask password for lock cards (kept in your login keychain)")
             }
         }
     }

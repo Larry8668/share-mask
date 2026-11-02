@@ -43,9 +43,4 @@ enum Authenticator {
         }
         return ctx
     }
-
-    static func customPassword(_ password: String, config: AppLockConfig) -> Bool {
-        guard let stored = config.passwordHash, !password.isEmpty else { return false }
-        return AppLockStore.verify(password, against: stored)
-    }
 }
