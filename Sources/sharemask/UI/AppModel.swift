@@ -27,6 +27,9 @@ final class AppModel: ObservableObject {
     @Published var lockOn = false
     @Published var lockCloseDelay = 0      // seconds; 0 instantly, -1 never
     @Published var lockHidesNotifications = false
+    @Published var lockHasPassword = false
+    /// Saved App lock settings are still in the Keychain and macOS didn't allow reading them.
+    @Published var lockSettingsUnreadable = false
     /// App whose App lock settings popover is open.
     @Published var openLockApp: String?
     @Published var lockApps: [AppItem] = []
@@ -55,6 +58,9 @@ final class AppModel: ObservableObject {
         var setAppLockSetting: (String, String, Int) -> Void = { _, _, _ in }
         var stopLocking: (String) -> Void = { _ in }
         var chooseAppToLock: () -> Void = {}
+        var setLockPassword: () -> Void = {}
+        var removeLockPassword: () -> Void = {}
+        var retryLockSettings: () -> Void = {}
         var present: (UInt32, Bool) -> Void = { _, _ in }
         var stopPresenting: () -> Void = {}
         var askScreen: () -> Void = {}

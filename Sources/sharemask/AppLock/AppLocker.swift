@@ -5,7 +5,11 @@ import CGSPrivate
 /// Keeps locked apps hidden until unlocked. A guard against casual snooping on an unlocked Mac,
 /// not a security boundary (someone logged in as you can still read an app's files).
 final class AppLocker {
-    private(set) var config = AppLockStore.load()
+    private(set) var config: AppLockConfig
+    /// Settings are still in the Keychain from an older version and macOS didn't allow reading them:
+    /// App lock can't know what to lock yet, so nothing is saved (that would replace the real
+    /// settings) until `retryLoad()` succeeds.
+    private(set) var settingsUnreadable = false
     let card = LockCard()
     /// bundle ID → when it was last frontmost while unlocked (for relock timing).
     private var unlocked: [String: Date] = [:]
@@ -61,7 +65,68 @@ final class AppLocker {
                                           "com.apple.systempreferences", "com.apple.SecurityAgent"]
 
     init() {
+        config = AppLockConfig()
+        applyLoaded(AppLockStore.load())
         card.config = { [weak self] in self?.config ?? AppLockConfig() }
+        card.checkPassword = { [weak self] pw in self?.checkPassword(pw) ?? .unavailable }
+    }
+
+    private func applyLoaded(_ loaded: AppLockStore.Loaded) {
+        switch loaded {
+        case .ok(let c): config = c; settingsUnreadable = false
+        case .keychainDenied: settingsUnreadable = true
+        }
+    }
+
+    /// Asks macOS for Keychain access again (the window's "Try again").
+    func retryLoad() {
+        guard settingsUnreadable else { return }
+        applyLoaded(AppLockStore.load())
+        Log.info("app lock: settings \(settingsUnreadable ? "still unreadable" : "loaded") after retry")
+        guard !settingsUnreadable else { return }
+        reschedule()
+        enforce()
+        onChange?()
+    }
+
+    // MARK: sharemask password
+
+    enum PasswordCheck { case ok, wrong, unavailable }
+    /// Read from the Keychain the first time it's needed, then kept for this run.
+    private var passwordHashCache: String?
+
+    func checkPassword(_ pw: String) -> PasswordCheck {
+        guard config.hasPassword, !pw.isEmpty else { return .wrong }
+        if passwordHashCache == nil {
+            if let legacy = config.passwordHash { passwordHashCache = legacy }   // not yet moved (see AppLockStore.load)
+            else {
+                switch AppLockStore.readPasswordHash() {
+                case .hash(let h): passwordHashCache = h
+                case .missing: Log.warn("app lock: sharemask password is set but missing from the Keychain"); return .unavailable
+                case .denied(let s): Log.warn("app lock: Keychain access to the sharemask password not allowed (\(s))"); return .unavailable
+                }
+            }
+        }
+        return AppLockStore.verify(pw, against: passwordHashCache ?? "") ? .ok : .wrong
+    }
+
+    /// Sets (or with nil removes) the sharemask password. Returns false if the Keychain refused.
+    @discardableResult
+    func setPassword(_ pw: String?) -> Bool {
+        guard !settingsUnreadable else { return false }
+        if let pw = pw {
+            let h = AppLockStore.hash(pw)
+            guard AppLockStore.setPasswordHash(h) else { return false }
+            passwordHashCache = h
+            update { $0.passwordSet = true; $0.passwordHash = nil }
+            Log.info("app lock: sharemask password set")
+        } else {
+            guard AppLockStore.deletePasswordHash() else { return false }
+            passwordHashCache = nil
+            update { $0.passwordSet = nil; $0.passwordHash = nil }
+            Log.info("app lock: sharemask password removed")
+        }
+        return true
     }
 
     var isActive: Bool { config.enabled && !config.apps.isEmpty }
@@ -100,6 +165,10 @@ final class AppLocker {
     }
 
     func update(_ change: (inout AppLockConfig) -> Void) {
+        guard !settingsUnreadable else {
+            Log.warn("app lock: settings not saved — the saved ones are still waiting for Keychain access")
+            return
+        }
         var c = config
         change(&c)
         c.apps = c.apps.filter { !AppLocker.unlockable.contains($0) }
@@ -107,7 +176,7 @@ final class AppLocker {
         config = c
         AppLockStore.save(c)
         reschedule()
-        Log.info("app lock config: enabled=\(c.enabled) apps=\(c.apps) relock=\(c.relockMinutes)m sleep=\(c.relockOnSleep) quit=\(c.guardQuit) keepAlive=\(c.keepAlive) password=\(c.passwordHash != nil) perApp=\((c.appSettings ?? [:]).mapValues { "close=\($0.closeRelockSeconds.map(String.init) ?? "-") bg=\($0.relockMinutes.map(String.init) ?? "-") hide=\($0.hideNotifications.map { "\($0)" } ?? "-")" })")
+        Log.info("app lock config: enabled=\(c.enabled) apps=\(c.apps) relock=\(c.relockMinutes)m sleep=\(c.relockOnSleep) quit=\(c.guardQuit) keepAlive=\(c.keepAlive) password=\(c.hasPassword) perApp=\((c.appSettings ?? [:]).mapValues { "close=\($0.closeRelockSeconds.map(String.init) ?? "-") bg=\($0.relockMinutes.map(String.init) ?? "-") hide=\($0.hideNotifications.map { "\($0)" } ?? "-")" })")
         enforce()
         onChange?()
     }

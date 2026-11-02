@@ -163,6 +163,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // App lock first: a relaunch after a force-quit must re-hide locked apps immediately.
         locker.onChange = { [weak self] in self?.syncLockState() }
         locker.start()
+        if locker.settingsUnreadable {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.offerLockSettingsRetry() }
+        }
         notifications.onChange = { [weak self] _ in
             guard let self = self else { return }
             self.pipeline?.options = self.effectiveOptions
@@ -877,6 +880,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         a.toggleLock = { [weak self] in self?.appLockCommand("toggle", nil) }
         a.toggleLockApp = { [weak self] b in self?.appLockCommand("app", b) }
         a.setCloseDelay = { [weak self] v in self?.appLockCommand("closeRelock", "\(v)") }
+        a.setLockPassword = { [weak self] in self?.appLockCommand("password", nil) }
+        a.removeLockPassword = { [weak self] in self?.appLockCommand("removePassword", nil) }
+        a.retryLockSettings = { [weak self] in self?.locker.retryLoad(); self?.updateModel() }
         a.lockNow = { [weak self] b in self?.locker.lockNow(b) }
         a.toggleHideNotifications = { [weak self] in self?.appLockCommand("hideNotifs", nil) }
         a.setAppLockSetting = { [weak self] b, key, v in self?.appLockCommand("appSetting", "\(b)|\(key)|\(v)") }
@@ -950,6 +956,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if m.lockOn != lm.enabled { m.lockOn = lm.enabled }
         if m.lockCloseDelay != locker.config.closeDelay { m.lockCloseDelay = locker.config.closeDelay }
         if m.lockHidesNotifications != locker.config.hidesNotifications { m.lockHidesNotifications = locker.config.hidesNotifications }
+        if m.lockHasPassword != locker.config.hasPassword { m.lockHasPassword = locker.config.hasPassword }
+        if m.lockSettingsUnreadable != locker.settingsUnreadable { m.lockSettingsUnreadable = locker.settingsUnreadable }
         let cfg = locker.config
         let locks = lm.apps.map { a -> AppModel.AppItem in
             var item = AppModel.AppItem(id: a.bundleID, name: a.name, on: a.locked, detail: a.unlockedNow ? "unlocked" : "")
@@ -1078,7 +1086,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }.sorted { ($0.locked ? 0 : 1, $0.name.lowercased()) < ($1.locked ? 0 : 1, $1.name.lowercased()) }
         return .init(enabled: c.enabled, apps: apps, relockMinutes: c.relockMinutes, closeDelay: c.closeDelay,
                      hideNotifications: c.hidesNotifications, relockOnSleep: c.relockOnSleep,
-                     guardQuit: c.guardQuit, keepAlive: c.keepAlive, hasPassword: c.passwordHash != nil)
+                     guardQuit: c.guardQuit, keepAlive: c.keepAlive, hasPassword: c.hasPassword)
     }
 
     /// Every change except turning App lock ON and "lock all" needs authentication while active.
@@ -1162,9 +1170,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !locker.config.keepAlive { locker.update { $0.keepAlive = true }; afterKeepAliveSettingChange() }
             else { change { [weak self] in self?.locker.update { $0.keepAlive = false }; self?.afterKeepAliveSettingChange() } }
         case "password": change { [weak self] in self?.askNewPassword() }
-        case "removePassword": change { [weak self] in self?.locker.update { $0.passwordHash = nil } }
+        case "removePassword":
+            change { [weak self] in
+                guard let self = self else { return }
+                if !self.locker.setPassword(nil) {
+                    self.alert("Password not removed", "macOS didn't allow sharemask to change its Keychain item. Try again and choose Allow when asked.")
+                }
+                self.updateModel()
+            }
         default: break
         }
+    }
+
+    /// Saved App lock settings are still in the Keychain (older version) and macOS said no.
+    private func offerLockSettingsRetry() {
+        guard locker.settingsUnreadable else { return }
+        alerts.show(title: "App lock is waiting for Keychain access",
+                    detail: "Your settings move out of the Keychain once (after updating). Allow access when macOS asks.",
+                    primary: "Try again", secondary: "Later", timeout: 120,
+                    onPrimary: { [weak self] in
+                        self?.locker.retryLoad()
+                        self?.updateModel()
+                        if self?.locker.settingsUnreadable == true { self?.offerLockSettingsRetry() }
+                    },
+                    onSecondary: {})
     }
 
     private func afterKeepAliveSettingChange() {
@@ -1179,7 +1208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func askNewPassword() {
         let a = NSAlert()
         a.messageText = "Set a sharemask password"
-        a.informativeText = "Used on lock cards instead of Touch ID (your Mac login password keeps working too). At least 4 characters."
+        a.informativeText = "Used on lock cards besides Touch ID (your Mac login password keeps working too). At least 4 characters.\n\nIt's kept in your login keychain, so macOS may ask you to allow sharemask access to it, e.g. the first time it's used after an update."
         let f1 = NSSecureTextField(frame: NSRect(x: 0, y: 30, width: 240, height: 24)); f1.placeholderString = "New password"
         let f2 = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24)); f2.placeholderString = "Repeat"
         let box = NSView(frame: NSRect(x: 0, y: 0, width: 240, height: 54)); box.addSubview(f1); box.addSubview(f2)
@@ -1196,7 +1225,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setLockPassword(_ pw: String) {
-        locker.update { $0.passwordHash = AppLockStore.hash(pw) }
+        if !locker.setPassword(pw) {
+            alert("Password not set", locker.settingsUnreadable
+                  ? "Your App lock settings are still waiting for Keychain access. Press Try again in the App lock card first."
+                  : "macOS didn't allow sharemask to save it in your Keychain.")
+        }
+        updateModel()
     }
 
     // MARK: Which screen to share
@@ -1453,6 +1487,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             setLockPassword("test1234")
             locker.update { $0.enabled = true; $0.apps = [AppDelegate.testAppID]; $0.relockMinutes = 0; $0.keepAlive = true }
             afterKeepAliveSettingChange()
+        case "lock-legacy-setup":   // test: ≤ 0.2.12-style settings in the Keychain, with a password
+            var c = AppLockConfig(); c.enabled = true; c.apps = [AppDelegate.testAppID]; c.keepAlive = false; c.relockMinutes = 60
+            c.passwordHash = AppLockStore.hash("test1234")
+            AppLockStore.writeLegacyForTesting(c)
+        case "keychain-allow":   // test: macOS now allows access; then "Try again"
+            AppLockStore.simulateDenied = false
+            locker.retryLoad()
+        case "lock-state":
+            Log.info("script: lock state unreadable=\(locker.settingsUnreadable) enabled=\(locker.config.enabled) apps=\(locker.config.apps) hasPassword=\(locker.config.hasPassword) file=\(FileManager.default.fileExists(atPath: AppLockStore.fileURL.path)) fileHasHash=\((try? String(contentsOf: AppLockStore.fileURL, encoding: .utf8))?.contains("passwordHash") ?? false) legacyLeft=\(AppLockStore.hasSavedConfig && !FileManager.default.fileExists(atPath: AppLockStore.fileURL.path))")
+        case "try-change":   // test: a settings change while unreadable must not save
+            locker.update { $0.relockMinutes = 7 }
+        case "remove-password": _ = locker.setPassword(nil)
         case "lock-teardown":
             locker.update { $0 = AppLockConfig() }
             afterKeepAliveSettingChange()
