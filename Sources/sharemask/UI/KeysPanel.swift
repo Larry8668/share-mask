@@ -6,7 +6,8 @@ final class KeysPanel {
     static let lines: [(String, String)] = [
         ("⌃⌥B", "Panic: pixellate everything / restore"),
         ("⌃⌥M", "All per-app masks off / on"),
-        ("⌃⌥R (hold)", "Reveal the frontmost app while held"),
+        ("⌃⌥R (hold)", "Reveal the front app (locked: keeps its drawn masks)"),
+        ("⌃⌥⇧R (hold)", "Reveal the front app completely"),
         ("⌃⌥1 … ⌃⌥9", "Unmask / re-mask app #1–9 (numbers in Masks ▸)"),
         ("⌃⌥0", "Re-enable every mask"),
         ("⌃⌥A", "Allowlist mode on / off"),

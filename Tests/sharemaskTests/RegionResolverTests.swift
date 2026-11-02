@@ -210,6 +210,26 @@ final class ResolverOptionsTests: XCTestCase {
         XCTAssertTrue(RegionResolver.resolve(presets: base, windows: win, display: display, frontmostBundleID: nil, options: ResolveOptions(disabled: ["chat/list"])).isEmpty)
         XCTAssertTrue(RegionResolver.resolve(presets: base, windows: win, display: display, frontmostBundleID: nil, options: ResolveOptions(disabled: ["chat"])).isEmpty)
     }
+    func testPeekLiftsAppLockBlurButKeepsDrawnRegions() {
+        let win = [w(1, "chat", CGRect(x: 0, y: 0, width: 200, height: 200))]
+        let locked = ResolveOptions(forceMasked: ["chat"])
+        XCTAssertEqual(RegionResolver.resolve(presets: base, windows: win, display: display, frontmostBundleID: nil, options: locked).count, 2)
+        var peek = locked; peek.peeked = ["chat"]
+        let out = RegionResolver.resolve(presets: base, windows: win, display: display, frontmostBundleID: nil, options: peek)
+        XCTAssertEqual(out.count, 1)   // only the drawn "list" region (left half)
+        XCTAssertEqual(out[0].rect, CGRect(x: 0, y: 800, width: 100, height: 200))
+        var all = locked; all.revealed = ["chat"]
+        XCTAssertTrue(RegionResolver.resolve(presets: base, windows: win, display: display, frontmostBundleID: nil, options: all).isEmpty)
+    }
+    func testPeekInAllowlistModeShowsWindowButKeepsDrawnRegions() {
+        let win = [w(1, "chat", CGRect(x: 0, y: 0, width: 200, height: 200))]
+        var o = ResolveOptions(allowlistMode: true)
+        o.peeked = ["chat"]
+        let out = RegionResolver.resolve(presets: base, windows: win, display: display, frontmostBundleID: nil, options: o)
+        // The blanket no longer covers the chat window, but its drawn region does.
+        XCTAssertTrue(out.contains { $0.rect == CGRect(x: 0, y: 800, width: 100, height: 200) })
+        XCTAssertFalse(out.contains { $0.rect.contains(CGRect(x: 0, y: 600, width: 200, height: 400)) })
+    }
     func testAllowlistMasksEverythingButAllowedWindows() {
         // Allowed "slides" window in the middle, a non-allowed window in front covering its left part.
         let slides = w(1, "slides", CGRect(x: 200, y: 200, width: 400, height: 400))

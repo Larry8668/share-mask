@@ -43,8 +43,11 @@ struct TrackedWindow: Equatable {
 struct ResolveOptions: Equatable {
     /// Everything masked except `presets.allowlist` (+ `revealed`).
     var allowlistMode = false
-    /// Bundle IDs temporarily shown in full (hold-to-reveal).
+    /// Bundle IDs temporarily shown in full (hold ⌃⌥⇧R, or ⌃⌥R on an app with no outer blur).
     var revealed: Set<String> = []
+    /// Bundle IDs whose outer, whole-window blur (App lock, allowlist mode) is lifted while their
+    /// drawn regions stay masked (hold ⌃⌥R on a locked app).
+    var peeked: Set<String> = []
     /// Temporarily disabled masks: "bundleID" (whole app), "bundleID/regionName" or "rule:<name>".
     var disabled: Set<String> = []
     /// Apps masked whole-window regardless of presets (App lock's list), unless revealed.
@@ -80,7 +83,7 @@ enum RegionResolver {
 
         // 1. Allowlist mode: mask the whole frame except the visible parts of allowed windows.
         if options.allowlistMode {
-            let allowed = Set(presets.allowlist).union(options.revealed)
+            let allowed = Set(presets.allowlist).union(options.revealed).union(options.peeked)
             var visible: [CGRect] = []
             for (index, w) in windows.enumerated() where w.isNormalVisible && !ignorePIDs.contains(w.pid) {
                 guard let b = w.bundleID, allowed.contains(b) else { continue }
@@ -108,7 +111,7 @@ enum RegionResolver {
             if options.revealed.contains(bundleID) || options.disabled.contains(bundleID) { continue }
 
             var regions: [(PresetRegion, String)] = []   // (region, disable key)
-            if options.forceMasked.contains(bundleID) {
+            if options.forceMasked.contains(bundleID) && !options.peeked.contains(bundleID) {
                 regions.append((PresetRegion(name: "app lock", rect: CGRect(x: 0, y: 0, width: 1, height: 1), mode: presets.defaultMode), "applock:\(bundleID)"))
             }
             if let app = presets.apps[bundleID], !(app.whenFrontmostOnly && frontmostBundleID != bundleID) {

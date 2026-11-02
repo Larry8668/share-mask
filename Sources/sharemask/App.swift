@@ -480,8 +480,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Masks / reveal / allowlist / end share / preview
 
-    /// Hold-to-reveal: while the hotkey is down, the frontmost app is shown unmasked.
-    private func setReveal(_ on: Bool) {
+    /// Hold-to-reveal, one layer at a time. ⌃⌥R on an app under a whole-window blur (App lock, or
+    /// not on the allowlist in allowlist mode) lifts just that blur: its drawn regions stay masked.
+    /// On any other app, or with `all` (⌃⌥⇧R), the frontmost app is shown unmasked.
+    private func setReveal(_ on: Bool, all: Bool = false) {
         guard let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return }
         if on, pipeline?.panic == true {
             // Panic deliberately wins over everything; say so instead of silently doing nothing.
@@ -492,10 +494,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         if on {
-            options.revealed.insert(front)
-            Log.info("reveal ON for \(front)")
+            let blanketed = effectiveOptions.forceMasked.contains(front)
+                || (options.allowlistMode && !config.config.allowlist.contains(front))
+            if blanketed && !all {
+                options.peeked.insert(front)
+                Log.info("reveal ON for \(front): whole-window blur lifted, drawn regions stay")
+            } else {
+                options.revealed.insert(front)
+                Log.info("reveal ON for \(front)\(all ? " (everything)" : "")")
+            }
         } else {
+            guard !options.revealed.isEmpty || !options.peeked.isEmpty else { return }
             options.revealed.removeAll()
+        options.peeked.removeAll()
+            options.peeked.removeAll()
             Log.info("reveal off")
         }
     }
@@ -686,6 +698,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if p.panic && p.state.isRunning { status = "PANIC — whole feed redacted" }
             if options.allowlistMode && p.state.isRunning { status += " · ALLOWLIST" }
             if !options.revealed.isEmpty { status += " · REVEALING \(options.revealed.joined(separator: ","))" }
+            if !options.peeked.isEmpty { status += " · PEEKING \(options.peeked.joined(separator: ","))" }
             if p.state.isRunning, let m = meetings { latency += "\n" + m.statusText }
         }
 
@@ -1295,6 +1308,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hotkeys.set(.sReveal, combo: "ctrl+alt+R",
                         handler: { [weak self] in main.async { self?.setReveal(true) } },
                         onRelease: { [weak self] in main.async { self?.setReveal(false) } })
+            hotkeys.set(.sRevealAll, combo: "ctrl+alt+shift+R",
+                        handler: { [weak self] in main.async { self?.setReveal(true, all: true) } },
+                        onRelease: { [weak self] in main.async { self?.setReveal(false) } })
             hotkeys.set(.sAllowlist, combo: "ctrl+alt+A") { [weak self] in main.async { self?.toggleAllowlist() } }
             hotkeys.set(.sEnd, combo: "ctrl+alt+X") { [weak self] in main.async { self?.endSessionKey() } }
             hotkeys.set(.sAllOn, combo: "ctrl+alt+0") { [weak self] in main.async { self?.reenableAllMasks() } }
@@ -1304,7 +1320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for (i, a) in numbered.enumerated() {
                 hotkeys.set(a, combo: "ctrl+alt+\(i + 1)") { [weak self] in main.async { self?.toggleNumberedMask(i) } }
             }
-            Log.info("session keys on (⌃⌥B/M/R/A/X/S/0-9/K)")
+            Log.info("session keys on (⌃⌥B/M/R/⇧R/A/X/S/0-9/K)")
             if !shownKeysThisLaunch {
                 shownKeysThisLaunch = true
                 keysPanel.show(on: launch.source.id)
@@ -1539,6 +1555,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         case "show-picker-prompt": showPickerPrompt(on: p.source.id)   // test: the prompt without a picker
+        case "inject-test-regions":   // test: in-memory only (not saved) — a left sidebar mask for the test app
+            var cfg = config.config
+            cfg.apps[AppDelegate.testAppID] = AppPreset(regions: [PresetRegion(name: "sidebar", rect: CGRect(x: 0, y: 0, width: 0.3, height: 1), mode: cfg.defaultMode)], whenFrontmostOnly: false)
+            p.config = cfg
+        case "log-test-regions":
+            let wins = p.tracker.latest.windows.filter { $0.bundleID == AppDelegate.testAppID && $0.isNormalVisible }
+            let regs = p.regionsForTesting()
+            let win = wins.first.map { "\(Int($0.boundsPoints.width * p.source.geometry.scale))x\(Int($0.boundsPoints.height * p.source.geometry.scale))" } ?? "none"
+            Log.info("script: regions on screen (test app window \(win) px): \(regs.map { "\(Int($0.rect.width))x\(Int($0.rect.height))" })")
+        case "activate-test-app": NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first?.activate()
+        case "reveal-down", "reveal-up", "reveal-all-down", "reveal-all-up":   // test: real ⌃⌥R / ⌃⌥⇧R presses
+            let src = CGEventSource(stateID: .hidSystemState)
+            let e = CGEvent(keyboardEventSource: src, virtualKey: 15, keyDown: action.hasSuffix("down"))
+            e?.flags = action.hasPrefix("reveal-all") ? [.maskControl, .maskAlternate, .maskShift] : [.maskControl, .maskAlternate]
+            e?.post(tap: .cghidEventTap)
         case "key-ctrl-alt-s":   // test: real ⌃⌥S key press
             let src = CGEventSource(stateID: .hidSystemState)
             for down in [true, false] {

@@ -47,7 +47,9 @@ Lock apps on your own screen, so someone using your unlocked Mac can't open them
   locked apps first. An authenticated Quit stays quit.
 - Changing any App lock setting (except making it stricter) asks for authentication. Settings live
   in your Keychain, not in presets.json, so they can't be edited around.
-- Locked apps are also masked whole-window in screen shares and presentations.
+- Locked apps are also masked whole-window in screen shares and presentations. Hold ⌃⌥R to
+  show one without the whole-window blur (the regions you drew for it stay masked), or ⌃⌥⇧R to show
+  it completely.
 
 What it is and isn't: a guard against casual snooping on an unlocked Mac. Someone already logged in
 as you and determined enough can still unload the agent, delete the app, or read an app's files
