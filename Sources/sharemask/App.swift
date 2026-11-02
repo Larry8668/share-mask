@@ -275,6 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !up { self?.promptedStrayIDs.removeAll(); self?.strayCount = 0 }
             self?.refreshMenu()
             if up { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self?.checkStrays() } }
+            self?.updatePickerWatch(up)
         }
         p.start()
         meetings?.start()
@@ -852,7 +853,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .running where p.output != .proxy:
             phase = .presenting; title = "Presenting"
             subtitle = "Masks are applied on \(AppDelegate.externalScreens().first { $0.id == p.output.tv }?.name ?? "the TV")."
-        case .running: phase = .live; title = "Live"; subtitle = "In your call, share the screen called “sharemask”."
+        case .running:
+            phase = .live; title = "Live"; subtitle = "In your call, share the screen called “sharemask”."
+            if let id = p.guardedDisplayID, let n = SharePickerAssist.listedNumber(of: id) {
+                subtitle = "In your call, share the screen called “sharemask” (lists that number screens show it as “Screen \(n)”)."
+            }
         case .starting: phase = .starting; title = "Starting…"; subtitle = "Creating the sharemask display."
         case .error(let e): phase = .error; title = "Needs attention"; subtitle = e
         default:
@@ -1228,6 +1233,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private var pendingPresentMirror: Bool?
 
+    // MARK: macOS share picker
+
+    private let pickerPrompt = PromptPanel()
+    private var pickerWatch: Timer?
+    private var pickerOpen = false
+
+    /// While the sharemask screen exists, notice macOS's share picker (2×/s, from the window list
+    /// the tracker already polls) and offer to pick the sharemask screen in it.
+    private func updatePickerWatch(_ up: Bool) {
+        pickerWatch?.invalidate(); pickerWatch = nil
+        pickerOpen = false
+        pickerPrompt.dismiss()
+        guard up else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in   // the new screen takes a moment to list
+            if let id = self?.pipeline?.guardedDisplayID, let n = SharePickerAssist.listedNumber(of: id) {
+                Log.info("sharemask screen is display \(id); apps that number screens list it as “Screen \(n)”")
+            }
+        }
+        pickerWatch = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in self?.checkPicker() }
+    }
+
+    private func checkPicker() {
+        guard let p = pipeline, p.output == .proxy, let id = p.guardedDisplayID else { return }
+        let open = SharePickerAssist.pickerShowing(on: id, windows: p.tracker.latest.windows)
+        guard open != pickerOpen else { return }
+        pickerOpen = open
+        Log.info("macOS share picker \(open ? "opened" : "closed")")
+        guard open else { pickerPrompt.dismiss(); return }
+        showPickerPrompt(on: p.source.id)
+    }
+
+    /// A click-through hint: the picker swallows clicks while it's open, so the action is ⌃⌥S.
+    private func showPickerPrompt(on display: CGDirectDisplayID) {
+        pickerPrompt.show(title: "Press ⌃⌥S to share the sharemask screen",
+                          detail: AXIsProcessTrusted() ? "It's invisible, so it can't be clicked in the picker. ⌃⌥S picks it for you."
+                                                       : "It's invisible, so it can't be clicked. ⌃⌥S needs Accessibility (System Settings ▸ Privacy & Security).",
+                          primary: "", secondary: "", timeout: 120,
+                          level: .screenSaver, topOffset: 190, icon: "rectangle.on.rectangle", on: display,
+                          onPrimary: {}, onSecondary: {})
+    }
+
+    /// ⌃⌥S: press "Share sharemask" in macOS's picker.
+    private func shareOwnScreen(fromKey: Bool) {   // fromKey: for the log only
+        guard let p = pipeline, p.output == .proxy, let id = p.guardedDisplayID else { return }
+        pickerPrompt.dismiss()
+        Log.info("share picker assist: requested (\(fromKey ? "⌃⌥S" : "button"))")
+        SharePickerAssist.pressShareButton(on: id)
+    }
+
     // MARK: Session keys (simple ⌃⌥ combos, only while capturing/presenting)
 
     private func updateSessionKeys() {
@@ -1244,12 +1298,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hotkeys.set(.sAllowlist, combo: "ctrl+alt+A") { [weak self] in main.async { self?.toggleAllowlist() } }
             hotkeys.set(.sEnd, combo: "ctrl+alt+X") { [weak self] in main.async { self?.endSessionKey() } }
             hotkeys.set(.sAllOn, combo: "ctrl+alt+0") { [weak self] in main.async { self?.reenableAllMasks() } }
+            hotkeys.set(.sShare, combo: "ctrl+alt+S") { [weak self] in main.async { self?.shareOwnScreen(fromKey: true) } }
             hotkeys.set(.sKeys, combo: "ctrl+alt+K") { [weak self] in main.async { self?.keysPanel.show(on: self?.launch.source.id ?? CGMainDisplayID()) } }
             let numbered: [Hotkeys.Action] = [.sMask1, .sMask2, .sMask3, .sMask4, .sMask5, .sMask6, .sMask7, .sMask8, .sMask9]
             for (i, a) in numbered.enumerated() {
                 hotkeys.set(a, combo: "ctrl+alt+\(i + 1)") { [weak self] in main.async { self?.toggleNumberedMask(i) } }
             }
-            Log.info("session keys on (⌃⌥B/M/R/A/X/0-9/K)")
+            Log.info("session keys on (⌃⌥B/M/R/A/X/S/0-9/K)")
             if !shownKeysThisLaunch {
                 shownKeysThisLaunch = true
                 keysPanel.show(on: launch.source.id)
@@ -1461,6 +1516,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             Log.info("script: test app window → \(ext.localizedName)")
         case "focus-finder": NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first?.activate()
+        case "picker-probe": SharePickerProbe.shared.present()   // test: macOS's share picker, from sharemask
+        case "hit-picker":   // research: Accessibility elements in the picker's controls on our screen
+            guard let id = p.guardedDisplayID else { break }
+            let b = CGDisplayBounds(id)
+            let sys = AXUIElementCreateSystemWide()
+            var seen = Set<String>()
+            for y in stride(from: b.minY + 4, to: b.minY + 170, by: 8) {
+                for x in stride(from: b.minX + 4, to: b.maxX, by: 24) {
+                    var el: AXUIElement?
+                    guard AXUIElementCopyElementAtPosition(sys, Float(x), Float(y), &el) == .success, let e = el else { continue }
+                    var role: CFTypeRef?, desc: CFTypeRef?, title: CFTypeRef?, ident: CFTypeRef?, pos: CFTypeRef?, size: CFTypeRef?
+                    AXUIElementCopyAttributeValue(e, kAXRoleAttribute as CFString, &role)
+                    AXUIElementCopyAttributeValue(e, kAXDescriptionAttribute as CFString, &desc)
+                    AXUIElementCopyAttributeValue(e, kAXTitleAttribute as CFString, &title)
+                    AXUIElementCopyAttributeValue(e, kAXIdentifierAttribute as CFString, &ident)
+                    AXUIElementCopyAttributeValue(e, kAXPositionAttribute as CFString, &pos)
+                    AXUIElementCopyAttributeValue(e, kAXSizeAttribute as CFString, &size)
+                    var pid: pid_t = 0; AXUIElementGetPid(e, &pid)
+                    let key = "\(pid) \(role as? String ?? "?") d=\(desc as? String ?? "") t=\(title as? String ?? "") id=\(ident as? String ?? "") \(pos.map { "\($0)" } ?? "") \(size.map { "\($0)" } ?? "")"
+                    if seen.insert(key).inserted { Log.info("picker hit @\(Int(x)),\(Int(y)): " + key.replacingOccurrences(of: "\n", with: " ")) }
+                }
+            }
+        case "show-picker-prompt": showPickerPrompt(on: p.source.id)   // test: the prompt without a picker
+        case "key-ctrl-alt-s":   // test: real ⌃⌥S key press
+            let src = CGEventSource(stateID: .hidSystemState)
+            for down in [true, false] {
+                let e = CGEvent(keyboardEventSource: src, virtualKey: 1, keyDown: down); e?.flags = [.maskControl, .maskAlternate]
+                e?.post(tap: .cghidEventTap)
+            }
+        case "press-share":   // test: press the picker's "Share sharemask" button
+            if let id = p.guardedDisplayID { SharePickerAssist.pressShareButton(on: id) }
         case "show-main": mainWindow.show()
         case "close-main": mainWindow.closeForTesting()
         case "relock-test-app": locker.lockNow(AppDelegate.testAppID)

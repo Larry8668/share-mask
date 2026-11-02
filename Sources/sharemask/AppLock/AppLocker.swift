@@ -52,6 +52,7 @@ final class AppLocker {
     static let spaceChangeWindow: TimeInterval = 2
     private var lastSpaceChange = Date.distantPast
     private var awayOnOtherSpace: Set<String> = []
+    private var lastAwayNote: [String: String] = [:]
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
     var onChange: (() -> Void)?
@@ -140,7 +141,12 @@ final class AppLocker {
             guard let id = w[kCGWindowNumber as String] as? UInt32 else { continue }
             let spaces = SMSpacesForWindow(id).map { $0.uint64Value }
             if !spaces.isEmpty && current.isDisjoint(with: spaces) {
-                Log.info("app lock: \(app.bundleIdentifier ?? "?") window \(id) is on desktop \(spaces) (shown: \(current.sorted()))")
+                // Polled 4×/s: log only when the answer changes.
+                let note = "window \(id) is on desktop \(spaces) (shown: \(current.sorted()))"
+                if lastAwayNote[app.bundleIdentifier ?? "?"] != note {
+                    lastAwayNote[app.bundleIdentifier ?? "?"] = note
+                    Log.info("app lock: \(app.bundleIdentifier ?? "?") \(note)")
+                }
                 return true
             }
         }

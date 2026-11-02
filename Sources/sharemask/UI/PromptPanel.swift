@@ -12,10 +12,14 @@ final class PromptPanel {
     private var chooser: NSPopUpButton?
     private var onChoice: ((Int) -> Void)?
 
+    /// An empty `primary` makes it a click-through hint with no buttons (for use over macOS's share
+    /// picker, which swallows clicks while it's open).
     /// `choices` adds a pop-up (e.g. which screen to share) whose selection is reported through
     /// `onChoice` before `onPrimary` runs.
     func show(title: String, detail: String, primary: String, secondary: String, timeout: TimeInterval = 90,
               choices: [String]? = nil, selected: Int = 0, onChoice: ((Int) -> Void)? = nil,
+              level: NSWindow.Level = .statusBar, topOffset: CGFloat = 12, icon symbol: String = "eye.slash.fill",
+              on displayID: CGDirectDisplayID? = nil,
               onPrimary: @escaping () -> Void, onSecondary: @escaping () -> Void) {
         dismiss()
         self.onChoice = onChoice
@@ -25,7 +29,7 @@ final class PromptPanel {
         let width: CGFloat = 420
         let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: 96),
                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        p.level = .statusBar
+        p.level = level
         p.sharingType = .none
         p.isOpaque = false
         p.backgroundColor = .clear
@@ -42,7 +46,7 @@ final class PromptPanel {
         bg.autoresizingMask = [.width, .height]
 
         let icon = NSImageView(frame: NSRect(x: 16, y: 50, width: 28, height: 28))
-        icon.image = NSImage(systemSymbolName: "eye.slash.fill", accessibilityDescription: nil)?
+        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 22, weight: .medium))
         icon.contentTintColor = .systemGreen
         let t = NSTextField(labelWithString: title)
@@ -60,7 +64,15 @@ final class PromptPanel {
         b1.sizeToFit(); b2.sizeToFit()
         b1.frame.origin = NSPoint(x: width - 16 - b1.frame.width, y: 8)
         b2.frame.origin = NSPoint(x: b1.frame.minX - 8 - b2.frame.width, y: 8)
-        [icon, t, d, b1, b2].forEach { bg.addSubview($0) }
+        [icon, t, d].forEach { bg.addSubview($0) }
+        if primary.isEmpty {
+            p.ignoresMouseEvents = true
+            p.setContentSize(NSSize(width: width, height: 70))
+            bg.frame = NSRect(x: 0, y: 0, width: width, height: 70)
+            icon.frame.origin.y = 24; t.frame.origin.y = 38; d.frame.origin.y = 8
+        } else {
+            [b1, b2].forEach { bg.addSubview($0) }
+        }
         if let choices = choices, choices.count > 1 {
             let pop = NSPopUpButton(frame: .zero, pullsDown: false)
             pop.addItems(withTitles: choices)
@@ -74,10 +86,12 @@ final class PromptPanel {
         }
         p.contentView = bg
 
-        // Top-centre of the main (real) display, just under the menu bar.
-        let screen = NSScreen.main ?? NSScreen.screens[0]
+        // Top-centre of the given (real) display, just under the menu bar. NSScreen.main follows
+        // focus and can be the invisible sharemask screen (e.g. while macOS's share picker is open).
+        let screen = displayID.flatMap { id in NSScreen.screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == id } }
+            ?? NSScreen.screens[0]   // the menu-bar screen
         let vf = screen.visibleFrame
-        p.setFrameOrigin(NSPoint(x: vf.midX - width / 2, y: vf.maxY - 96 - 12))
+        p.setFrameOrigin(NSPoint(x: vf.midX - width / 2, y: vf.maxY - 96 - topOffset))
         p.orderFrontRegardless()
         panel = p
         dismissTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in

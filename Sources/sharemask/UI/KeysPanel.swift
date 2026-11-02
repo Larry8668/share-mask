@@ -11,6 +11,7 @@ final class KeysPanel {
         ("⌃⌥0", "Re-enable every mask"),
         ("⌃⌥A", "Allowlist mode on / off"),
         ("⌃⌥X", "End share / stop presenting"),
+        ("⌃⌥S", "Pick “sharemask” in macOS’s share picker"),
         ("⌃⌥K", "Show this card"),
     ]
 
