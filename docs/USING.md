@@ -50,7 +50,7 @@ a session starts; ⌃⌥K shows it again.
 |---|---|
 | ⌃⌥B | Panic: pixellate everything / restore |
 | ⌃⌥M | All per-app masks off / on |
-| ⌃⌥R (hold) | Reveal the frontmost app while held (a locked app keeps its drawn masks) |
+| ⌃⌥R | Reveal the frontmost app / hide it again (a locked app keeps its drawn masks); stays on until the share ends |
 | ⌃⌥⇧R (hold) | Reveal the frontmost app completely while held |
 | ⌃⌥1 … ⌃⌥9 | Unmask / re-mask app #1–9 (numbered in Masks ▸) |
 | ⌃⌥0 | Re-enable every mask |
@@ -109,16 +109,19 @@ Launch flags: `--demo` adds a hard-coded pixellate rect at (100,100,400,300) px 
 
 ## Panic and reveal
 
-Panic (⌃⌥B) blurs everything and wins over every other setting: while it's on, hold-to-reveal (⌃⌥R)
+Panic (⌃⌥B) blurs everything and wins over every other setting: while it's on, reveal (⌃⌥R)
 does nothing and sharemask says so. Turn panic off first. Apps you've locked with App lock are
 blurred whole in shares.
 
 Reveal lifts one layer at a time:
 
-- **⌃⌥R (hold)** on a locked app (or, in allowlist mode, an app that isn't allowed) lifts only the
-  whole-window blur. The regions you drew for it stay masked: for WhatsApp, the chat opens up while
-  the chat list and top bar stay blurred. On any other app it reveals the drawn regions as before.
-- **⌃⌥⇧R (hold)** shows the front app completely.
+- **⌃⌥R** (press to turn on, press again in that app to turn off) on a locked app (or, in allowlist
+  mode, an app that isn't allowed) lifts only the whole-window blur. The regions you drew for it
+  stay masked: for WhatsApp, the chat opens up while the chat list and top bar stay blurred. On any
+  other app it reveals the drawn regions. It stays on while you switch apps, works for several apps
+  at once, and everything is hidden again when the share ends (or with ⌃⌥0). A note on your screen
+  (never shared) lists what's revealed.
+- **⌃⌥⇧R (hold)** shows the front app completely while held.
 
 ## Notification banners while sharing
 

@@ -30,8 +30,8 @@ watching**. Your own screen stays exactly as it is.
 ![Your screen stays untouched; the call sees the chat list pixellated](docs/demo.png)
 
 - **Draw what to hide** right on top of any app: rectangles, squares, circles. Masks follow the window.
-- **Panic key** (⌃⌥B) pixellates everything instantly; **hold ⌃⌥R** to reveal an app for a moment
-  (a locked app keeps its drawn masks; ⌃⌥⇧R shows everything).
+- **Panic key** (⌃⌥B) pixellates everything instantly; **⌃⌥R** reveals an app until the share ends
+  (a locked app keeps its drawn masks; hold ⌃⌥⇧R to show everything).
 - **Present in a room** over HDMI or AirPlay with the same masks.
 - Starts by itself when a call begins, and stays out of the way otherwise.
 

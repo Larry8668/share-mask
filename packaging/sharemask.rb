@@ -9,8 +9,8 @@
 # updates) but is not notarised, so Gatekeeper would refuse the quarantined download. The
 # postflight below removes the quarantine attribute (Homebrew 7 dropped --no-quarantine).
 cask "sharemask" do
-  version "0.2.11"
-  sha256 "9590179f96c8e8fa691f9ced6a882068dfc3b15820f1baf74f2dddceb99543db"
+  version "0.2.12"
+  sha256 "519a3a8819f5493daf5f82fe58f8bd44773b7aa5eab12de8b109608301b13896"
 
   url "https://github.com/Larry8668/share-mask/releases/download/v#{version}/sharemask-#{version}.zip"
   name "sharemask"
