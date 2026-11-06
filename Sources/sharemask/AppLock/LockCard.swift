@@ -14,6 +14,11 @@ final class LockCard: NSObject, NSTextFieldDelegate {
     private var errorLabel: NSTextField?
     private var onResult: ((Bool) -> Void)?
     private var authContext: LAContext?
+    /// The system Touch ID / password prompt is up: don't pull focus back to the card meanwhile
+    /// (that dismisses the prompt).
+    private var authPending = false
+    /// The app the card is showing for, if visible.
+    var subjectShowing: String? { isVisible ? subject : nil }
     /// Start the Touch ID / password prompt as soon as the card appears (no extra click).
     var autoPrompt = true
     private(set) var subject: String?           // bundle ID or a purpose key ("quit", "settings")
@@ -27,7 +32,7 @@ final class LockCard: NSObject, NSTextFieldDelegate {
             // Same card already up (e.g. the app was clicked, then Edit regions): keep it, but let
             // the newest request decide what happens after unlocking.
             onResult = completion
-            panel?.makeKeyAndOrderFront(nil)
+            if !authPending { panel?.makeKeyAndOrderFront(nil) }
             return
         }
         close(result: false)
@@ -118,7 +123,9 @@ final class LockCard: NSObject, NSTextFieldDelegate {
     @objc private func systemAuth() {
         let reason = subject.map { ["quit": "quit sharemask", "settings": "change App lock settings"][$0] ?? "unlock this app" } ?? "unlock"
         authContext?.invalidate()
+        authPending = true
         authContext = Authenticator.system(reason: reason) { [weak self] ok in
+            self?.authPending = false
             if ok { Log.info("lock card \(self?.subject ?? "?"): unlocked via system prompt"); self?.close(result: true) }
         }
     }
@@ -152,6 +159,7 @@ final class LockCard: NSObject, NSTextFieldDelegate {
     func close(result: Bool) {
         authContext?.invalidate()     // take down a still-open Touch ID prompt
         authContext = nil
+        authPending = false
         let cb = onResult
         onResult = nil
         let s = subject

@@ -50,6 +50,16 @@ final class AppLocker {
     /// For a few seconds after unlocking (the app is un-hiding) an empty window list is not trusted.
     static let unlockGrace: TimeInterval = 3
     private var unlockedAt: [String: Date] = [:]
+    /// Recent hides per locked app; an app hidden this often is fighting back (it un-hides itself).
+    private var recentHides: [String: [Date]] = [:]
+    /// Locked apps that won't stay hidden: covered by `shield` instead of being hidden again.
+    private var fighting: Set<String> = []
+    private let shield = LockShield()
+    static let fightHides = 4, fightWindow: TimeInterval = 2
+    /// An app that quits this soon after being unlocked and comes back this quickly is restarting
+    /// itself (Steam relaunches after starting/updating), not being closed by someone.
+    static let selfRestartAfterUnlock: TimeInterval = 20, selfRestartWithin: TimeInterval = 10
+    private var restarting: [String: Date] = [:]
     /// Switching desktops (Spaces, or away from a full-screen app) makes Accessibility report zero
     /// windows for an app whose window is on another desktop — indistinguishable from "closed" by
     /// count alone. A drop to zero within this long after a Space change is treated as "away".
@@ -145,8 +155,19 @@ final class AppLocker {
             })
         }
         observers.append(ws.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] n in
-            guard let self = self, let b = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier,
-                  self.unlocked[b] != nil else { return }
+            guard let self = self, let b = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier else { return }
+            if NSRunningApplication.runningApplications(withBundleIdentifier: b).isEmpty { self.shield.remove(b); self.fighting.remove(b) }
+            guard self.unlocked[b] != nil else { return }
+            if let at = self.unlockedAt[b], Date().timeIntervalSince(at) < AppLocker.selfRestartAfterUnlock {
+                // Possibly restarting itself: keep it unlocked if it's back within a few seconds.
+                self.restarting[b] = Date()
+                Log.info("app lock: \(b) quit \(Int(Date().timeIntervalSince(at))) s after unlocking; waiting \(Int(AppLocker.selfRestartWithin)) s in case it's restarting itself")
+                DispatchQueue.main.asyncAfter(deadline: .now() + AppLocker.selfRestartWithin) { [weak self] in
+                    guard let self = self, self.restarting.removeValue(forKey: b) != nil else { return }
+                    if NSRunningApplication.runningApplications(withBundleIdentifier: b).isEmpty { self.relock(b, reason: "app quit") }
+                }
+                return
+            }
             self.relock(b, reason: "app quit")
         })
         observers.append(ws.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -173,6 +194,9 @@ final class AppLocker {
         change(&c)
         c.apps = c.apps.filter { !AppLocker.unlockable.contains($0) }
         guard c != config else { return }
+        for b in Set(config.apps).subtracting(c.apps) {
+            unlocked[b] = nil; restarting[b] = nil; fighting.remove(b); shield.remove(b); unobserve(b)
+        }
         config = c
         AppLockStore.save(c)
         reschedule()
@@ -282,6 +306,7 @@ final class AppLocker {
     private func relock(_ b: String, reason: String) {
         guard unlocked[b] != nil else { return }
         unlocked[b] = nil
+        restarting[b] = nil
         hadWindow.remove(b)
         awayOnOtherSpace.remove(b)
         visibleWindowIDs[b] = nil
@@ -324,6 +349,14 @@ final class AppLocker {
 
     private func appEvent(_ app: NSRunningApplication, activated: Bool) {
         guard let b = app.bundleIdentifier, isActive, config.apps.contains(b) else { return }
+        if unlocked[b] != nil, restarting.removeValue(forKey: b) != nil {
+            Log.info("app lock: \(b) restarted itself right after unlocking → still unlocked")
+            unlockedAt[b] = Date()
+            hadWindow.remove(b)
+            zeroSince[b] = nil; lastWindowCount[b] = nil
+            observe(app, b)
+            return
+        }
         if unlocked[b] != nil {
             // Reopened after its window was closed: clicking the Dock icon activates the app BEFORE it
             // draws a new window, so "activated with no windows" means closed-then-reopened. Lock now,
@@ -341,7 +374,7 @@ final class AppLocker {
             return
         }
         hide(app)
-        if activated { promptUnlock(app) }
+        if activated && card.subjectShowing != b { promptUnlock(app) }
     }
 
     private var fastTimer = false
@@ -349,8 +382,13 @@ final class AppLocker {
     /// as a backstop (launch/activate/unhide notifications do the real work); no timer at all while
     /// App lock is off.
     private func reschedule() {
-        let wantFast = isActive && !unlocked.isEmpty
-        if !isActive { timer?.invalidate(); timer = nil; return }
+        let wantFast = isActive && (!unlocked.isEmpty || !fighting.isEmpty)
+        if !isActive {
+            timer?.invalidate(); timer = nil
+            for b in fighting { shield.remove(b) }
+            fighting.removeAll()
+            return
+        }
         if timer != nil && wantFast == fastTimer { return }
         timer?.invalidate()
         let interval = wantFast ? 0.25 : 1.0
@@ -427,15 +465,32 @@ final class AppLocker {
             }
         }
         for app in NSWorkspace.shared.runningApplications {
-            guard let b = app.bundleIdentifier, config.apps.contains(b), unlocked[b] == nil, !app.isHidden, !app.isTerminated else { continue }
+            guard let b = app.bundleIdentifier, config.apps.contains(b), unlocked[b] == nil, !app.isTerminated else { continue }
+            if fighting.contains(b) { shield.cover(app); continue }
+            guard !app.isHidden else { continue }
             hide(app)
         }
     }
 
     private func hide(_ app: NSRunningApplication) {
+        guard let b = app.bundleIdentifier else { return }
+        if fighting.contains(b) { shield.cover(app); return }
         guard !app.isHidden else { return }
+        let now = Date()
+        var h = (recentHides[b] ?? []).filter { now.timeIntervalSince($0) < AppLocker.fightWindow }
+        h.append(now)
+        recentHides[b] = h
+        if h.count > AppLocker.fightHides {
+            // It un-hides itself as soon as it's hidden: stop the loop, cover its windows instead.
+            fighting.insert(b)
+            recentHides[b] = nil
+            Log.warn("app lock: \(b) keeps un-hiding itself → covering its windows instead of hiding it")
+            shield.cover(app)
+            reschedule()
+            return
+        }
         app.hide()
-        Log.info("app lock: hid \(app.bundleIdentifier ?? "?")")
+        Log.info("app lock: hid \(b)")
     }
 
     /// `detail` overrides the card's second line; `then` runs after a successful unlock.
@@ -448,6 +503,9 @@ final class AppLocker {
             self.unlocked[b] = Date()
             self.unlockedAt[b] = Date()
             self.hadWindow.remove(b)
+            self.shield.remove(b)
+            self.fighting.remove(b)
+            self.recentHides[b] = nil
             self.observe(app, b)
             self.reschedule()
             Log.info("app lock: unlocked \(b)")
