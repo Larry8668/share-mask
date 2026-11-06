@@ -1504,6 +1504,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             locker.update { $0.enabled = true; $0.apps = ["dev.sharemask.fightertest"]; $0.relockMinutes = 60; $0.keepAlive = false }
         case "lock-fighter-now": locker.lockNow("dev.sharemask.fightertest")
         case "activate-fighter": NSRunningApplication.runningApplications(withBundleIdentifier: "dev.sharemask.fightertest").first?.activate()
+        case "lock-setup-stubborn":   // test: lock a stand-in whose window ignores hiding (a hide that didn't take)
+            setLockPassword("test1234")
+            locker.update { $0.enabled = true; $0.apps = ["dev.sharemask.stubborntest", AppDelegate.testAppID]; $0.relockMinutes = 60; $0.keepAlive = false }
+        case "activate-stubborn": NSRunningApplication.runningApplications(withBundleIdentifier: "dev.sharemask.stubborntest").first?.activate()
+        case "activate-testapp": NSRunningApplication.runningApplications(withBundleIdentifier: AppDelegate.testAppID).first?.activate()
+        case "focus-state":
+            let st = NSRunningApplication.runningApplications(withBundleIdentifier: "dev.sharemask.stubborntest").first
+            Log.info("script: focus front=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?") sharemaskActive=\(NSApp.isActive) card=\(locker.card.subject ?? "none") stubborn=\(st.map { $0.isHidden ? "hidden" : "visible" } ?? "not running")")
+        case "cancel-card": locker.card.close(result: false)
+        case "steal-focus":   // test: another app takes focus while the card / prompt is up, then the card's check
+            NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first?.activate()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.locker.card.regainFocus() }
+        case "cover-stubborn": locker.coverForTesting("dev.sharemask.stubborntest")
+        case "click-cover-stubborn": locker.clickCoverForTesting("dev.sharemask.stubborntest")
         case "lock-teardown":
             locker.update { $0 = AppLockConfig() }
             afterKeepAliveSettingChange()

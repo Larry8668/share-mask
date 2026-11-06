@@ -45,8 +45,16 @@ Lock apps on your own screen, so someone using your unlocked Mac can't open them
 - **Relaunch if force-quit**: a per-user login agent (`~/Library/LaunchAgents/dev.sharemask.keepalive.plist`,
   no admin rights) brings sharemask back about a second after a Force Quit or `kill`, and it re-hides
   locked apps first. An authenticated Quit stays quit.
+- **A locked app stays hidden until you unlock it.** If macOS says it's hidden but its window is still
+  on screen (a hide can fail to take while the app is launching or activating), sharemask covers
+  that window with an opaque lock panel. The panel sits just above the app's own window, so the
+  apps in front of it stay visible. Clicking it brings up the unlock card. The panel goes once the
+  window is gone or you unlock.
 - **Apps that won't stay hidden** (Steam un-hides itself the moment it's hidden): sharemask notices
-  and covers the app's windows with a lock panel instead of hiding it again and again.
+  and covers the app's windows with the same lock panel instead of hiding it again and again.
+- **Touch ID ready straight away:** the unlock prompt starts only once sharemask has focus. If
+  hiding the locked app hands focus to another app, sharemask gives it back to the prompt, so your
+  finger works without clicking the prompt first.
 - **Apps that restart themselves** right after you unlock them (Steam does after updating) stay
   unlocked if they're back within 10 seconds; a real quit still relocks.
 - Changing any App lock setting (except making it stricter) asks for authentication.
