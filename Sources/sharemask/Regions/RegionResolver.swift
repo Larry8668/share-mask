@@ -60,6 +60,19 @@ struct ResolveOptions: Equatable {
 /// Pure function: presets × window geometry → pixel rects for this frame.
 enum RegionResolver {
     static let maxRegionsPerFrame = 64
+
+    /// Some apps draw their windows from a helper with its own bundle ID (Steam's store and library
+    /// window belongs to "Steam Helper", com.valvesoftware.steam.helper). A bundle ID that extends a
+    /// configured one ("<id>.<something>") counts as that app.
+    static func owningApp(_ bundleID: String, among known: Set<String>) -> String {
+        if known.contains(bundleID) { return bundleID }
+        var b = bundleID
+        while let dot = b.lastIndex(of: ".") {
+            b = String(b[..<dot])
+            if known.contains(b) { return b }
+        }
+        return bundleID
+    }
     static let notificationCenterBundleID = "com.apple.notificationcenterui"
 
     static func resolve(presets: PresetConfig,
@@ -72,6 +85,9 @@ enum RegionResolver {
         var out: [PixelRegion] = []
         var overflow: [PixelRegion] = []
         let frame = CGRect(origin: .zero, size: display.pixelSize)
+        let known = options.forceMasked.union(presets.apps.keys).union(presets.allowlist)
+            .union(options.revealed).union(options.peeked)
+        func app(_ w: TrackedWindow) -> String? { w.bundleID.map { owningApp($0, among: known) } }
 
         func emit(_ pieces: [CGRect], unoccluded: CGRect, mode: RedactMode, shape: RegionShape = .rect) {
             if out.count + pieces.count > maxRegions {
@@ -86,10 +102,10 @@ enum RegionResolver {
             let allowed = Set(presets.allowlist).union(options.revealed).union(options.peeked)
             var visible: [CGRect] = []
             for (index, w) in windows.enumerated() where w.isNormalVisible && !ignorePIDs.contains(w.pid) {
-                guard let b = w.bundleID, allowed.contains(b) else { continue }
+                guard let b = app(w), allowed.contains(b) else { continue }
                 var pieces = [w.boundsPoints.intersection(display.boundsPoints)].filter { !$0.isNull && $0.width > 0 && $0.height > 0 }
                 for front in windows[..<index] where front.isNormalVisible && !ignorePIDs.contains(front.pid)
-                        && !(front.bundleID.map { allowed.contains($0) } ?? false) && front.boundsPoints.intersects(w.boundsPoints) {
+                        && !(app(front).map { allowed.contains($0) } ?? false) && front.boundsPoints.intersects(w.boundsPoints) {
                     pieces = pieces.flatMap { subtract(front.boundsPoints, from: $0) }
                 }
                 visible.append(contentsOf: pieces)
@@ -107,7 +123,7 @@ enum RegionResolver {
         // 2. Per-app presets and title rules.
         for (index, window) in windows.enumerated() {
             guard window.isNormalVisible, !ignorePIDs.contains(window.pid) else { continue }
-            let bundleID = window.bundleID ?? ""
+            let bundleID = app(window) ?? ""
             if options.revealed.contains(bundleID) || options.disabled.contains(bundleID) { continue }
 
             var regions: [(PresetRegion, String)] = []   // (region, disable key)

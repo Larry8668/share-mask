@@ -1517,6 +1517,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first?.activate()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.locker.card.regainFocus() }
         case "cover-stubborn": locker.coverForTesting("dev.sharemask.stubborntest")
+        case "lock-setup-family":   // test: lock the Steam-like stand-in (its window belongs to a helper)
+            setLockPassword("test1234")
+            locker.update { $0.enabled = true; $0.apps = ["dev.sharemask.familytest"]; $0.relockMinutes = 60; $0.keepAlive = false }
+        case "activate-family": NSRunningApplication.runningApplications(withBundleIdentifier: "dev.sharemask.familytest").first?.activate()
+        case "lock-family-now": locker.lockNow("dev.sharemask.familytest")
+        case "lock-setup-steam":   // test on the owner's real Steam (test store; lock-teardown undoes it)
+            setLockPassword("test1234")
+            locker.update { $0.enabled = true; $0.apps = ["com.valvesoftware.steam"]; $0.relockMinutes = 60; $0.keepAlive = false }
+        case "activate-steam":
+            (NSRunningApplication.runningApplications(withBundleIdentifier: "com.valvesoftware.steam.helper").first { $0.processIdentifier > 0 }
+             ?? NSRunningApplication.runningApplications(withBundleIdentifier: "com.valvesoftware.steam").first)?.activate()
         case "click-cover-stubborn": locker.clickCoverForTesting("dev.sharemask.stubborntest")
         case "lock-teardown":
             locker.update { $0 = AppLockConfig() }
