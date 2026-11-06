@@ -16,36 +16,42 @@ final class LockShield {
     var isEmpty: Bool { panels.isEmpty }
     func covers(_ b: String) -> Bool { !(panels[b] ?? []).isEmpty }
 
-    struct Window { let id: CGWindowID; let frame: NSRect }
+    struct Window { let id: CGWindowID; let frame: NSRect; let bundleID: String? }
 
-    /// Normal on-screen windows per process, in AppKit (bottom-left) coordinates. One window-list
-    /// read, shared by every `cover` call in a pass.
-    static func onScreenWindows() -> [pid_t: [Window]] {
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [:] }
+    /// Normal on-screen windows with their owner's bundle ID, in AppKit (bottom-left) coordinates.
+    /// One window-list read, shared by every `cover` call in a pass. The owner is looked up by
+    /// process: Steam's own process isn't in NSWorkspace's app list (only a pid -1 placeholder).
+    static func onScreenWindows() -> [Window] {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
         let primaryH = CGDisplayBounds(CGMainDisplayID()).height
-        var out: [pid_t: [Window]] = [:]
+        var bundles: [pid_t: String?] = [:]
+        var out: [Window] = []
         for w in list {
             guard let pid = w[kCGWindowOwnerPID as String] as? pid_t, (w[kCGWindowLayer as String] as? Int) == 0,
                   let id = w[kCGWindowNumber as String] as? UInt32,
                   let d = w[kCGWindowBounds as String] as? NSDictionary, let r = CGRect(dictionaryRepresentation: d),
                   r.width > 40, r.height > 40 else { continue }
-            out[pid, default: []].append(Window(id: id, frame: NSRect(x: r.minX, y: primaryH - r.maxY, width: r.width, height: r.height)))
+            if bundles[pid] == nil { bundles[pid] = .some(NSRunningApplication(processIdentifier: pid)?.bundleIdentifier) }
+            out.append(Window(id: id, frame: NSRect(x: r.minX, y: primaryH - r.maxY, width: r.width, height: r.height), bundleID: bundles[pid] ?? nil))
         }
         return out
     }
 
-    /// Covers the app's current on-screen windows (none → covers removed). Call periodically while
-    /// it's locked. Returns whether anything is covered.
+    /// Covers the current on-screen windows of app `b` and its helpers (Steam's window belongs to
+    /// "Steam Helper", com.valvesoftware.steam.helper); none → covers removed. Call periodically
+    /// while it's locked. Returns whether anything is covered.
     @discardableResult
-    func cover(_ app: NSRunningApplication, windows: [pid_t: [Window]]? = nil) -> Bool {
-        guard let b = app.bundleIdentifier else { return false }
-        let wins = (windows ?? LockShield.onScreenWindows())[app.processIdentifier] ?? []
+    func cover(_ b: String, apps: [NSRunningApplication], windows: [Window]? = nil) -> Bool {
+        let wins = (windows ?? LockShield.onScreenWindows()).filter {
+            guard let x = $0.bundleID else { return false }
+            return x == b || x.hasPrefix(b + ".")
+        }
         var existing = panels[b] ?? []
         while existing.count > wins.count { existing.removeLast().orderOut(nil) }
-        while existing.count < wins.count { existing.append(makePanel(for: b, icon: app.icon)) }
+        while existing.count < wins.count { existing.append(makePanel(for: b, icon: apps.first { $0.bundleIdentifier == b }?.icon ?? apps.first?.icon)) }
         // Frontmost (it activated itself): above everything. Otherwise just above its own window, so
         // the apps you're using in front of it stay visible.
-        let front = app.isActive
+        let front = apps.contains { $0.isActive }
         for (p, w) in zip(existing, wins) {
             if p.frame != w.frame { p.setFrame(w.frame, display: true) }
             if front {

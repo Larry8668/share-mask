@@ -52,6 +52,13 @@ Lock apps on your own screen, so someone using your unlocked Mac can't open them
   window is gone or you unlock.
 - **Apps that won't stay hidden** (Steam un-hides itself the moment it's hidden): sharemask notices
   and covers the app's windows with the same lock panel instead of hiding it again and again.
+- **Apps whose window comes from a helper.** Steam's store and library window belongs to a background
+  process, "Steam Helper" (`com.valvesoftware.steam.helper`), which macOS won't hide. A helper whose
+  bundle ID extends a locked app's (`<app id>.<something>`) counts as that app:
+  - its windows get the lock panel;
+  - they're blurred in screen shares;
+  - it brings up the same lock card.
+  Masks drawn for an app apply to its helpers' windows too.
 - **Touch ID ready straight away:** the unlock prompt starts only once sharemask has focus. If
   hiding the locked app hands focus to another app, sharemask gives it back to the prompt, so your
   finger works without clicking the prompt first.

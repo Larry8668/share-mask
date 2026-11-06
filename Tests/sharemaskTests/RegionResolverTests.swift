@@ -221,6 +221,17 @@ final class ResolverOptionsTests: XCTestCase {
         var all = locked; all.revealed = ["chat"]
         XCTAssertTrue(RegionResolver.resolve(presets: base, windows: win, display: display, frontmostBundleID: nil, options: all).isEmpty)
     }
+    func testHelperWindowsCountAsTheirApp() {
+        // Steam's window belongs to "Steam Helper" (com.valvesoftware.steam.helper).
+        let helper = [w(1, "com.valvesoftware.steam.helper", CGRect(x: 0, y: 0, width: 200, height: 200))]
+        let locked = ResolveOptions(forceMasked: ["com.valvesoftware.steam"])
+        XCTAssertEqual(RegionResolver.resolve(presets: base, windows: helper, display: display, frontmostBundleID: nil, options: locked).count, 1)
+        var shown = locked; shown.revealed = ["com.valvesoftware.steam"]
+        XCTAssertTrue(RegionResolver.resolve(presets: base, windows: helper, display: display, frontmostBundleID: nil, options: shown).isEmpty)
+        // Only whole dot-separated parts: "com.valvesoftware.steamy" is another app.
+        let other = [w(1, "com.valvesoftware.steamy", CGRect(x: 0, y: 0, width: 200, height: 200))]
+        XCTAssertTrue(RegionResolver.resolve(presets: base, windows: other, display: display, frontmostBundleID: nil, options: locked).isEmpty)
+    }
     func testPeekInAllowlistModeShowsWindowButKeepsDrawnRegions() {
         let win = [w(1, "chat", CGRect(x: 0, y: 0, width: 200, height: 200))]
         var o = ResolveOptions(allowlistMode: true)

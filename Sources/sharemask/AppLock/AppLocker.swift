@@ -41,12 +41,18 @@ final class AppLocker {
     private func onScreenWindowIDs(_ app: NSRunningApplication) -> Set<CGWindowID> {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return [] }
         var ids = Set<CGWindowID>()
-        for w in list where (w[kCGWindowOwnerPID as String] as? pid_t) == app.processIdentifier && ((w[kCGWindowLayer as String] as? Int) ?? 1) == 0 {
+        let pids = familyPIDs(app)
+        for w in list where (w[kCGWindowOwnerPID as String] as? pid_t).map(pids.contains) ?? false && ((w[kCGWindowLayer as String] as? Int) ?? 1) == 0 {
             let b = (w[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0 as CFDictionary) } ?? .zero
             if b.width > 200 && b.height > 150, let id = w[kCGWindowNumber as String] as? UInt32 { ids.insert(id) }
         }
         return ids
     }
+    private func familyPIDs(_ app: NSRunningApplication) -> Set<pid_t> {
+        guard let b = app.bundleIdentifier else { return [app.processIdentifier] }
+        return Set(family(lockKey(for: b) ?? b).map(\.processIdentifier)).union([app.processIdentifier])
+    }
+
     /// For a few seconds after unlocking (the app is un-hiding) an empty window list is not trusted.
     static let unlockGrace: TimeInterval = 3
     private var unlockedAt: [String: Date] = [:]
@@ -148,6 +154,33 @@ final class AppLocker {
     }
 
     var isActive: Bool { config.enabled && !config.apps.isEmpty }
+
+    /// The locked-list entry an app belongs to: itself, or the app it's a helper of. Steam draws its
+    /// store/library window from "Steam Helper" (com.valvesoftware.steam.helper), so hiding only
+    /// Steam left that window up and usable.
+    func lockKey(for bundleID: String) -> String? {
+        let k = RegionResolver.owningApp(bundleID, among: Set(config.apps))
+        return config.apps.contains(k) ? k : nil
+    }
+
+    /// The running app and its helpers (same bundle ID, or one that extends it).
+    func family(_ b: String) -> [NSRunningApplication] {
+        NSWorkspace.shared.runningApplications.filter {
+            guard let x = $0.bundleIdentifier, !$0.isTerminated, $0.processIdentifier > 0 else { return false }
+            return x == b || x.hasPrefix(b + ".")
+        }
+    }
+
+    /// macOS only hides regular apps: a background helper (Steam Helper) refuses, so its windows are
+    /// covered instead of being hidden again and again.
+    private static func canHide(_ app: NSRunningApplication) -> Bool {
+        app.processIdentifier > 0 && app.activationPolicy == .regular
+    }
+
+    /// The app to show on the lock card (the main one, not a helper).
+    private func mainApp(_ b: String, fallback: NSRunningApplication) -> NSRunningApplication {
+        NSRunningApplication.runningApplications(withBundleIdentifier: b).first { !$0.isTerminated && $0.processIdentifier > 0 } ?? fallback
+    }
     func isLocked(_ bundleID: String) -> Bool { isActive && config.apps.contains(bundleID) && unlocked[bundleID] == nil }
 
     private var started = false
@@ -234,8 +267,9 @@ final class AppLocker {
         guard !current.isEmpty, let all = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return false }
         let known = app.bundleIdentifier.flatMap { visibleWindowIDs[$0] } ?? []
         guard !known.isEmpty else { return false }   // never saw it visible → can't claim it's elsewhere
+        let pids = familyPIDs(app)
         let mains = all.filter {
-            ($0[kCGWindowOwnerPID as String] as? pid_t) == app.processIdentifier
+            ($0[kCGWindowOwnerPID as String] as? pid_t).map(pids.contains) ?? false
                 && ($0[kCGWindowNumber as String] as? UInt32).map { known.contains($0) } ?? false
         }
         for w in mains {
@@ -345,18 +379,24 @@ final class AppLocker {
             if !warnedNoAX { warnedNoAX = true; Log.warn("app lock: Accessibility not granted; can't relock on window close (only on quit/idle/sleep)") }
             return nil
         }
-        var value: CFTypeRef?
-        let r = AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute as CFString, &value)
-        guard r == .success, let wins = value as? [AXUIElement] else { return r == .noValue ? 0 : nil }
-        return wins.count   // minimized windows are included, closed ones are gone
+        // Summed over the app and its helpers (Steam's window belongs to Steam Helper).
+        var total: Int?
+        for pid in familyPIDs(app) {
+            var value: CFTypeRef?
+            let r = AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid), kAXWindowsAttribute as CFString, &value)
+            if r == .success, let wins = value as? [AXUIElement] { total = (total ?? 0) + wins.count }   // minimized included
+            else if r == .noValue { total = total ?? 0 }
+        }
+        return total
     }
 
     private func inGrace(_ b: String) -> Bool {
         unlockedAt[b].map { Date().timeIntervalSince($0) < AppLocker.unlockGrace } ?? false
     }
 
-    private func appEvent(_ app: NSRunningApplication, activated: Bool) {
-        guard let b = app.bundleIdentifier, isActive, config.apps.contains(b) else { return }
+    private func appEvent(_ event: NSRunningApplication, activated: Bool) {
+        guard isActive, let eb = event.bundleIdentifier, let b = lockKey(for: eb) else { return }
+        let app = mainApp(b, fallback: event)
         if unlocked[b] != nil, restarting.removeValue(forKey: b) != nil {
             Log.info("app lock: \(b) restarted itself right after unlocking → still unlocked")
             unlockedAt[b] = Date()
@@ -381,7 +421,8 @@ final class AppLocker {
             if activated { unlocked[b] = Date() }
             return
         }
-        hide(app)
+        for a in family(b) { hide(a) }
+        if event.processIdentifier != app.processIdentifier { hide(event) }
         if activated && card.subjectShowing != b { promptUnlock(app) }
     }
 
@@ -474,28 +515,31 @@ final class AppLocker {
                 relock(b, reason: mins == 0 ? "switched away" : "\(mins) min in background")
             }
         }
-        var windows: [pid_t: [LockShield.Window]]?   // read once, only if a locked app is running
-        for app in NSWorkspace.shared.runningApplications {
-            guard let b = app.bundleIdentifier, config.apps.contains(b), unlocked[b] == nil, !app.isTerminated else { continue }
+        var windows: [LockShield.Window]?   // read once, only if a locked app is running
+        for b in config.apps where unlocked[b] == nil {
+            let fam = family(b)   // the app and its helpers (Steam Helper draws Steam's window)
+            guard !fam.isEmpty else { if shield.covers(b) { shield.remove(b) }; continue }
             if windows == nil { windows = LockShield.onScreenWindows() }
-            if fighting.contains(b) { shield.cover(app, windows: windows); continue }
-            if !app.isHidden { hide(app); continue }
+            if fighting.contains(b) { shield.cover(b, apps: fam, windows: windows); continue }
+            let showing = fam.filter { !$0.isHidden && AppLocker.canHide($0) }
+            if !showing.isEmpty { showing.forEach(hide); continue }
             // Counted as hidden, but its window can still be on screen: a hide that didn't take
             // (it was launching or activating), seen with WhatsApp behind the lock card. Cover it.
             if let t = lastHideAt[b], Date().timeIntervalSince(t) < AppLocker.hideSettle { continue }
             let was = shield.covers(b)
-            let now = shield.cover(app, windows: windows)
+            let now = shield.cover(b, apps: fam, windows: windows)
             if now != was {
-                Log.info(now ? "app lock: \(b) is hidden but its window is still on screen → covered"
+                Log.info(now ? "app lock: \(b) is hidden but a window of it (or a helper) is still on screen → covered"
                              : "app lock: \(b) window gone → cover removed")
             }
         }
     }
 
     private func hide(_ app: NSRunningApplication) {
-        guard let b = app.bundleIdentifier else { return }
-        if fighting.contains(b) { shield.cover(app); return }
-        guard !app.isHidden else { return }
+        guard let ab = app.bundleIdentifier else { return }
+        let b = lockKey(for: ab) ?? ab
+        if fighting.contains(b) { shield.cover(b, apps: family(b)); return }
+        guard !app.isHidden, AppLocker.canHide(app) else { return }   // helpers: covered by enforce()
         let now = Date()
         var h = (recentHides[b] ?? []).filter { now.timeIntervalSince($0) < AppLocker.fightWindow }
         h.append(now)
@@ -505,13 +549,13 @@ final class AppLocker {
             fighting.insert(b)
             recentHides[b] = nil
             Log.warn("app lock: \(b) keeps un-hiding itself → covering its windows instead of hiding it")
-            shield.cover(app)
+            shield.cover(b, apps: family(b))
             reschedule()
             return
         }
         app.hide()
         lastHideAt[b] = now
-        Log.info("app lock: hid \(b)")
+        Log.info("app lock: hid \(ab)")
         // Check it really went (cover it if not) as soon as it's had time to.
         DispatchQueue.main.asyncAfter(deadline: .now() + AppLocker.hideSettle + 0.05) { [weak self] in self?.enforce() }
         // Hiding the frontmost app hands focus to some other app, and the Touch ID prompt only takes
@@ -523,10 +567,14 @@ final class AppLocker {
 
     /// `detail` overrides the card's second line; `then` runs after a successful unlock.
     func promptUnlock(_ app: NSRunningApplication, detail: String? = nil, then: (() -> Void)? = nil) {
-        guard let b = app.bundleIdentifier else { return }
-        let name = app.localizedName ?? b
+        guard let ab = app.bundleIdentifier else { return }
+        // A helper (Steam Helper) stands for its app: one card, named after the app. NSWorkspace may
+        // list the app only as a pid -1 placeholder; its name and icon are still right.
+        let b = lockKey(for: ab) ?? ab
+        let main = NSRunningApplication.runningApplications(withBundleIdentifier: b).first
+        let name = main?.localizedName ?? app.localizedName ?? b
         card.show(subject: b, title: "\(name) is locked", detail: detail ?? "Unlock to use it. It relocks \(relockText(for: b)).",
-                  icon: app.icon) { [weak self] ok in
+                  icon: main?.icon ?? app.icon) { [weak self] ok in
             guard ok, let self = self else { return }
             self.unlocked[b] = Date()
             self.unlockedAt[b] = Date()
@@ -537,6 +585,7 @@ final class AppLocker {
             self.observe(app, b)
             self.reschedule()
             Log.info("app lock: unlocked \(b)")
+            for a in self.family(b) where a.processIdentifier != app.processIdentifier { a.unhide() }
             app.unhide()
             app.activate()
             self.onChange?()
@@ -549,7 +598,7 @@ final class AppLocker {
     /// Test hooks: cover an app's windows as if its hide hadn't taken, and click the cover.
     func coverForTesting(_ b: String) {
         guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: b).first else { return }
-        Log.info("app lock test: covered \(b): \(shield.cover(app))")
+        Log.info("app lock test: covered \(b): \(shield.cover(b, apps: family(b)))")
     }
     func clickCoverForTesting(_ b: String) { shield.onClick?(b) }
 
