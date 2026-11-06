@@ -1499,6 +1499,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "try-change":   // test: a settings change while unreadable must not save
             locker.update { $0.relockMinutes = 7 }
         case "remove-password": _ = locker.setPassword(nil)
+        case "lock-setup-fighter":   // test: lock the Steam stand-in (re-activates itself when hidden)
+            setLockPassword("test1234")
+            locker.update { $0.enabled = true; $0.apps = ["dev.sharemask.fightertest"]; $0.relockMinutes = 60; $0.keepAlive = false }
+        case "lock-fighter-now": locker.lockNow("dev.sharemask.fightertest")
+        case "activate-fighter": NSRunningApplication.runningApplications(withBundleIdentifier: "dev.sharemask.fightertest").first?.activate()
         case "lock-teardown":
             locker.update { $0 = AppLockConfig() }
             afterKeepAliveSettingChange()
