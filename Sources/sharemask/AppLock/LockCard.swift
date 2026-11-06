@@ -114,10 +114,46 @@ final class LockCard: NSObject, NSTextFieldDelegate {
         Log.info("lock card: \(subject) (custom password \(hasCustom ? "set" : "not set"), auto prompt \(autoPrompt))")
         if autoPrompt {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                guard let self = self, self.subject == subject else { return }
-                self.systemAuth()
+                self?.startAuthWhenFocused(subject: subject, tries: 20)
             }
         }
+    }
+
+    /// The Touch ID prompt only takes a finger while sharemask has focus; started while another
+    /// app is frontmost (e.g. the locked app was hidden just after the card appeared, and macOS
+    /// handed focus elsewhere) it waits for a click first. So get focus, then start it.
+    private func startAuthWhenFocused(subject: String, tries: Int) {
+        guard self.subject == subject, isVisible, !authPending else { return }
+        if NSApp.isActive || tries <= 0 {
+            if !NSApp.isActive { Log.warn("lock card: sharemask didn't get focus; starting the prompt anyway") }
+            systemAuth()
+            return
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        panel?.makeKeyAndOrderFront(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.startAuthWhenFocused(subject: subject, tries: tries - 1)
+        }
+    }
+
+    /// Focus moved to another app while the card is up (hiding the locked app does that): take
+    /// it back so the card, or the Touch ID prompt, gets the keyboard and the finger.
+    /// The Touch ID prompt is drawn by this macOS agent, which has focus while it's up.
+    static let promptAgent = "com.apple.LocalAuthentication.UIAgent"
+
+    func regainFocus() {
+        guard isVisible, !NSApp.isActive else { return }
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        guard front != Bundle.main.bundleIdentifier, front != LockCard.promptAgent else { return }
+        if authPending, let agent = NSRunningApplication.runningApplications(withBundleIdentifier: LockCard.promptAgent).first {
+            // Focus belongs to the prompt, not to sharemask (activating sharemask would take it away).
+            Log.info("lock card: focus went to \(front ?? "?") → back to the Touch ID prompt")
+            agent.activate()
+            return
+        }
+        Log.info("lock card: focus went to \(front ?? "?") → taking it back")
+        NSApp.activate(ignoringOtherApps: true)
+        panel?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func systemAuth() {

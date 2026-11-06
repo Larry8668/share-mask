@@ -60,6 +60,9 @@ final class AppLocker {
     /// itself (Steam relaunches after starting/updating), not being closed by someone.
     static let selfRestartAfterUnlock: TimeInterval = 20, selfRestartWithin: TimeInterval = 10
     private var restarting: [String: Date] = [:]
+    /// When each locked app was last hidden: its window can take a moment to go.
+    private var lastHideAt: [String: Date] = [:]
+    static let hideSettle: TimeInterval = 0.4
     /// Switching desktops (Spaces, or away from a full-screen app) makes Accessibility report zero
     /// windows for an app whose window is on another desktop — indistinguishable from "closed" by
     /// count alone. A drop to zero within this long after a Space change is treated as "away".
@@ -79,6 +82,11 @@ final class AppLocker {
         applyLoaded(AppLockStore.load())
         card.config = { [weak self] in self?.config ?? AppLockConfig() }
         card.checkPassword = { [weak self] pw in self?.checkPassword(pw) ?? .unavailable }
+        shield.onClick = { [weak self] b in
+            guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: b).first else { return }
+            Log.info("app lock: cover over \(b) clicked")
+            self?.promptUnlock(app)
+        }
     }
 
     private func applyLoaded(_ loaded: AppLockStore.Loaded) {
@@ -382,10 +390,12 @@ final class AppLocker {
     /// as a backstop (launch/activate/unhide notifications do the real work); no timer at all while
     /// App lock is off.
     private func reschedule() {
-        let wantFast = isActive && (!unlocked.isEmpty || !fighting.isEmpty)
+        // Fast too while a lock card is up or something is covered: a locked app whose hide didn't
+        // take is covered within a quarter second.
+        let wantFast = isActive && (!unlocked.isEmpty || !fighting.isEmpty || card.isVisible || !shield.isEmpty)
         if !isActive {
             timer?.invalidate(); timer = nil
-            for b in fighting { shield.remove(b) }
+            shield.removeAll()
             fighting.removeAll()
             return
         }
@@ -464,11 +474,21 @@ final class AppLocker {
                 relock(b, reason: mins == 0 ? "switched away" : "\(mins) min in background")
             }
         }
+        var windows: [pid_t: [LockShield.Window]]?   // read once, only if a locked app is running
         for app in NSWorkspace.shared.runningApplications {
             guard let b = app.bundleIdentifier, config.apps.contains(b), unlocked[b] == nil, !app.isTerminated else { continue }
-            if fighting.contains(b) { shield.cover(app); continue }
-            guard !app.isHidden else { continue }
-            hide(app)
+            if windows == nil { windows = LockShield.onScreenWindows() }
+            if fighting.contains(b) { shield.cover(app, windows: windows); continue }
+            if !app.isHidden { hide(app); continue }
+            // Counted as hidden, but its window can still be on screen: a hide that didn't take
+            // (it was launching or activating), seen with WhatsApp behind the lock card. Cover it.
+            if let t = lastHideAt[b], Date().timeIntervalSince(t) < AppLocker.hideSettle { continue }
+            let was = shield.covers(b)
+            let now = shield.cover(app, windows: windows)
+            if now != was {
+                Log.info(now ? "app lock: \(b) is hidden but its window is still on screen → covered"
+                             : "app lock: \(b) window gone → cover removed")
+            }
         }
     }
 
@@ -490,7 +510,15 @@ final class AppLocker {
             return
         }
         app.hide()
+        lastHideAt[b] = now
         Log.info("app lock: hid \(b)")
+        // Check it really went (cover it if not) as soon as it's had time to.
+        DispatchQueue.main.asyncAfter(deadline: .now() + AppLocker.hideSettle + 0.05) { [weak self] in self?.enforce() }
+        // Hiding the frontmost app hands focus to some other app, and the Touch ID prompt only takes
+        // a finger while sharemask has focus: take it back if a lock card is up.
+        if card.isVisible {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in self?.card.regainFocus() }
+        }
     }
 
     /// `detail` overrides the card's second line; `then` runs after a successful unlock.
@@ -514,7 +542,16 @@ final class AppLocker {
             self.onChange?()
             then?()
         }
+        reschedule()   // fast checks while the card is up
+        DispatchQueue.main.asyncAfter(deadline: .now() + AppLocker.hideSettle + 0.1) { [weak self] in self?.enforce() }
     }
+
+    /// Test hooks: cover an app's windows as if its hide hadn't taken, and click the cover.
+    func coverForTesting(_ b: String) {
+        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: b).first else { return }
+        Log.info("app lock test: covered \(b): \(shield.cover(app))")
+    }
+    func clickCoverForTesting(_ b: String) { shield.onClick?(b) }
 
     /// Accessibility window count (incl. minimized), for callers that need to wait for a window.
     func windowCountFor(_ app: NSRunningApplication) -> Int { windowCount(app) ?? 0 }
