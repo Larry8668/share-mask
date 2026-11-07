@@ -151,6 +151,7 @@ struct MainView: View {
                     Button(action: model.actions.preview) { Label("What others see", systemImage: "eye") }
                         .buttonStyle(.bordered).controlSize(.large)
                         .disabled(!isRunning)
+                    showOnlyMenu
                 }
                 .padding(.top, 6)
             }
@@ -160,6 +161,38 @@ struct MainView: View {
         .background(RoundedRectangle(cornerRadius: 20).fill(.background.opacity(0.55)))
         .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.08)))
         .animation(.spring(response: 0.45, dampingFraction: 0.8), value: model.phase)
+    }
+
+    /// Show the entire screen, or only one app (everything else hidden, blurred or black).
+    private var showOnlyMenu: some View {
+        Menu {
+            Button { model.actions.setShowOnly(nil) } label: {
+                if model.showOnly == nil { Label("Entire screen", systemImage: "checkmark") } else { Text("Entire screen") }
+            }
+            Section("Only this app (the rest is hidden; its own masks still apply)") {
+                ForEach(model.runningApps) { app in
+                    Button { model.actions.setShowOnly(app.id) } label: {
+                        if model.showOnly == app.id { Label(app.name, systemImage: "checkmark") } else { Text(app.name) }
+                    }
+                }
+            }
+            Section("Hide the rest with") {
+                ForEach([("blur", "Blur"), ("black", "Black")], id: \.0) { key, title in
+                    Button { model.actions.setHiddenStyle(key) } label: {
+                        if model.hiddenStyle == key { Label(title, systemImage: "checkmark") } else { Text(title) }
+                    }
+                }
+            }
+        } label: {
+            Label(showOnlyTitle, systemImage: model.showOnly == nil ? "rectangle.on.rectangle" : "macwindow")
+        }
+        .menuStyle(.borderedButton).controlSize(.large).fixedSize()
+        .help("What others see: the entire screen, or only one app")
+    }
+
+    private var showOnlyTitle: String {
+        guard let b = model.showOnly else { return "Entire screen" }
+        return "Only " + (model.runningApps.first { $0.id == b }?.name ?? b)
     }
 
     private var isRunning: Bool { [.live, .panic, .presenting, .starting].contains(model.phase) }

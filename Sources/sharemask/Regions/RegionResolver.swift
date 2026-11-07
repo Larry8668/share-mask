@@ -52,6 +52,11 @@ struct ResolveOptions: Equatable {
     var disabled: Set<String> = []
     /// Apps masked whole-window regardless of presets (App lock's list), unless revealed.
     var forceMasked: Set<String> = []
+    /// "Show only these apps": everything else is masked (like allowlist mode, with this set instead
+    /// of presets.allowlist). Their drawn masks still apply.
+    var showOnly: Set<String> = []
+    /// How the areas hidden by allowlist mode / showOnly are masked (nil: presets.defaultMode).
+    var blanketMode: RedactMode? = nil
     /// Notification banner frames (global points) read via Accessibility. When set, only these are
     /// masked instead of Notification Center's whole (full-screen) window.
     var notificationBanners: [CGRect]? = nil
@@ -86,7 +91,7 @@ enum RegionResolver {
         var overflow: [PixelRegion] = []
         let frame = CGRect(origin: .zero, size: display.pixelSize)
         let known = options.forceMasked.union(presets.apps.keys).union(presets.allowlist)
-            .union(options.revealed).union(options.peeked)
+            .union(options.revealed).union(options.peeked).union(options.showOnly)
         func app(_ w: TrackedWindow) -> String? { w.bundleID.map { owningApp($0, among: known) } }
 
         func emit(_ pieces: [CGRect], unoccluded: CGRect, mode: RedactMode, shape: RegionShape = .rect) {
@@ -98,8 +103,10 @@ enum RegionResolver {
         }
 
         // 1. Allowlist mode: mask the whole frame except the visible parts of allowed windows.
-        if options.allowlistMode {
-            let allowed = Set(presets.allowlist).union(options.revealed).union(options.peeked)
+        if options.allowlistMode || !options.showOnly.isEmpty {
+            let blanket = options.blanketMode ?? presets.defaultMode
+            let allowed = (options.showOnly.isEmpty ? Set(presets.allowlist) : options.showOnly)
+                .union(options.revealed).union(options.peeked)
             var visible: [CGRect] = []
             for (index, w) in windows.enumerated() where w.isNormalVisible && !ignorePIDs.contains(w.pid) {
                 guard let b = app(w), allowed.contains(b) else { continue }
@@ -114,9 +121,9 @@ enum RegionResolver {
             for v in visible { masked = masked.flatMap { subtract(v, from: $0) } }
             if masked.count > maxRegions / 2 {
                 // Too fragmented: mask everything (safe) — the user can reveal fewer apps.
-                out.append(PixelRegion(rect: frame, mode: presets.defaultMode))
+                out.append(PixelRegion(rect: frame, mode: blanket))
             } else {
-                emit(masked, unoccluded: display.boundsPoints, mode: presets.defaultMode)
+                emit(masked, unoccluded: display.boundsPoints, mode: blanket)
             }
         }
 

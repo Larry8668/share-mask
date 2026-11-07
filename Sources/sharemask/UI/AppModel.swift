@@ -42,6 +42,9 @@ final class AppModel: ObservableObject {
     @Published var updateAvailable: String?
     @Published var runningApps: [AppItem] = []   // for "add app" menus
     @Published var keys: [(String, String)] = []
+    /// "Show only this app" (nil: entire screen) and how the rest is hidden ("blur" / "black").
+    @Published var showOnly: String?
+    @Published var hiddenStyle = "blur"
 
     struct Actions {
         var toggleCapture: () -> Void = {}
@@ -66,6 +69,8 @@ final class AppModel: ObservableObject {
         var askScreen: () -> Void = {}
         var askAX: () -> Void = {}
         var preview: () -> Void = {}
+        var setShowOnly: (String?) -> Void = { _ in }
+        var setHiddenStyle: (String) -> Void = { _ in }
         var shortcuts: () -> Void = {}
         var update: () -> Void = {}
         var openMenu: () -> Void = {}
