@@ -272,7 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let dir = snapDir { p.snapshotDirectory = URL(fileURLWithPath: dir) }
         p.onPreview = { [weak self] img in
             guard let self = self, let p = self.pipeline else { return }
-            self.preview.update(img, status: "\(p.panic ? "PANIC · " : "")\(self.options.allowlistMode ? "allowlist · " : "")\(p.clock.summary().fps.rounded()) fps")
+            self.preview.setStatus("\(p.panic ? "PANIC · " : "")\(self.options.allowlistMode ? "allowlist · " : "")\(p.clock.summary().fps.rounded()) fps")
         }
         pipeline = p
         pointerGuard = PointerGuard(virtualDisplayID: { [weak p] in p?.guardedDisplayID }, sourceDisplayID: { [weak p] in p?.source.id ?? CGMainDisplayID() })
@@ -581,8 +581,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func togglePreview() {
-        preview.toggle(sourceDisplayID: pipeline?.source.id ?? launch.source.id)
-        if preview.isVisible, let img = pipeline?.lastRenderedImage { preview.update(img, status: "") }
+        guard let p = pipeline else { return }
+        preview.onNeedsFrame = { [weak p] in p?.requestRerender() }
+        preview.toggle(sourceDisplayID: p.source.id, device: p.metalDevice, context: p.redactor.context)
+        p.mirror = preview.isVisible ? preview : nil
+        if preview.isVisible && !p.state.isRunning { preview.setStatus("Not capturing: press Start to see the masked screen") }
         refreshMenu()
     }
 
@@ -1663,6 +1666,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let a = NSRunningApplication.runningApplications(withBundleIdentifier: "dev.sharemask.fulltest").first { pickRegion(pid: a.processIdentifier, bundleID: "dev.sharemask.fulltest") }
         case "picker-state": Log.info("script: picker \(picker?.debugState() ?? "not open")")
         case "picker-esc": picker?.cancelForTesting()
+        case "preview": togglePreview()
+        case "preview-state":
+            Log.info("script: preview \(preview.debugState())")
+            let num = preview.debugState()
+            Task {
+                let c = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                let mine = c?.windows.filter { $0.owningApplication?.processID == getpid() }.map { "\($0.title ?? "-") \(Int($0.frame.width))x\(Int($0.frame.height))" } ?? []
+                Log.info("script: ScreenCaptureKit lists sharemask windows: \(mine) (\(num.contains("window=") ? "" : ""))")
+            }
+        case "preview-big": preview.setSizeForTesting(NSSize(width: 1000, height: 674))
+        case "preview-unpin": preview.setPinForTesting(false)
+        case "picker-click-overlay": picker?.frontOverlayForTesting()
         case "picker-key-esc":   // test: a real Esc key event through AppKit's routing (reaches only the key window)
             if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                         windowNumber: NSApp.keyWindow?.windowNumber ?? 0, context: nil, characters: "\u{1b}",

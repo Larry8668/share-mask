@@ -96,6 +96,13 @@ final class Pipeline {
     private(set) var source: SourceDisplay
     private var capture: Capture?
     private let device: MTLDevice
+    var metalDevice: MTLDevice { device }
+    private var _mirror: FrameSink?
+    /// A second place every masked frame goes ("What others see"). Read from the render queue.
+    var mirror: FrameSink? {
+        get { lock.lock(); defer { lock.unlock() }; return _mirror }
+        set { lock.lock(); _mirror = newValue; lock.unlock() }
+    }
 
     /// Called on the main thread whenever `state` changes.
     var onStateChange: ((State) -> Void)?
@@ -698,6 +705,7 @@ final class Pipeline {
         if case .overlay = output { overlay = true } else { overlay = false }
         let image = redactor.process(buffer, regions: regions, patchesOnly: overlay)
         presenter?.present(image) { [clock] gpu in clock.recordGPU(seconds: gpu) }
+        mirror?.present(image, completion: nil)
         if let dir = snapshotDirectory, !snapshotTaken, FrameClock.hostSeconds() - captureStartedAt > 2 {
             snapshotTaken = true
             let cs = CGColorSpace(name: CGColorSpace.sRGB)!
