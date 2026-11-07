@@ -55,6 +55,9 @@ final class RegionPicker: NSObject {
         return "overlay[\(d(overlay))] toolbar[\(d(toolbar))] sharemaskActive=\(NSApp.isActive) front=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?") screen=\(overlay?.screen.map { "\(Int($0.frame.width))x\(Int($0.frame.height)) visibleTop=\(Int($0.visibleFrame.maxY))" } ?? "?")"
     }
 
+    /// Test hook: what a click on the overlay does to window order.
+    func frontOverlayForTesting() { overlay?.orderFront(nil) }
+
     func bringToFront() {
         NSApp.activate(ignoringOtherApps: true)
         overlay?.makeKeyAndOrderFront(nil)
@@ -139,7 +142,9 @@ final class RegionPicker: NSObject {
         let width: CGFloat = 760, height: CGFloat = 44
         let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: height),
                         styleMask: [.borderless, .nonactivatingPanel, .utilityWindow], backing: .buffered, defer: false)
-        p.level = .floating
+        // One level above the overlay: on a full-screen window the toolbar sits inside the overlay's
+        // area, and at the same level the (transparent) overlay ended up in front and took its clicks.
+        p.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
         p.sharingType = .none
         p.isOpaque = false
         p.backgroundColor = .clear

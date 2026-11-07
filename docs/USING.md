@@ -79,12 +79,19 @@ apps' windows. ⌃⌥S makes this unnecessary.)
 
 ## Recording the masked screen
 
-Screen recorders can record the sharemask screen just like a call can share it. Press **Start** in
-the sharemask menu first, since outside a meeting the screen doesn't exist. Then:
-- in a recorder that lists screens, choose **sharemask**;
-- in one that uses macOS's own picker, choose **Share entire screen** and press **⌃⌥S**.
+You can record the masked screen with any screen recorder or screenshot tool (Raycast, QuickTime,
+⇧⌘5), with nothing extra to install:
+1. Press **Start** in the sharemask menu. Outside a meeting, nothing is being masked until you do.
+2. Open **What others see** (menu or app window).
+3. In your recorder, choose **Select window** and pick **What others see**.
 
-A recorder that only lets you *click* the screen to record can't select it, because it's invisible.
+It shows the masked screen at full frame rate, at whatever size you make the window; make it
+bigger for a sharper recording. Turn off **Keep on top** in its bottom bar and it can go behind your
+other windows: recorders keep capturing a window while it's covered. Don't minimise it, though, and
+keep it on the desktop you're recording from.
+
+A recorder that lists *screens* can also record the invisible sharemask screen directly; in macOS's
+own picker, that's **Share entire screen**, then **⌃⌥S**.
 
 ## Region editor
 A transparent overlay sits exactly over the app's window (and follows it if it moves). Drag on
