@@ -1659,6 +1659,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             Log.info("script: test app window → \(ext.localizedName)")
         case "focus-finder": NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first?.activate()
+        case "pick-full":   // test: region editor on the full-screen stand-in
+            if let a = NSRunningApplication.runningApplications(withBundleIdentifier: "dev.sharemask.fulltest").first { pickRegion(pid: a.processIdentifier, bundleID: "dev.sharemask.fulltest") }
+        case "picker-state": Log.info("script: picker \(picker?.debugState() ?? "not open")")
+        case "picker-esc": picker?.cancelForTesting()
+        case "picker-key-esc":   // test: a real Esc key event through AppKit's routing (reaches only the key window)
+            if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                        windowNumber: NSApp.keyWindow?.windowNumber ?? 0, context: nil, characters: "\u{1b}",
+                                        charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 0x35) {
+                Log.info("script: sending Esc (key window: \(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "none"))")
+                NSApp.sendEvent(e)
+            }
         case "picker-probe": SharePickerProbe.shared.present()   // test: macOS's share picker, from sharemask
         case "hit-picker":   // research: Accessibility elements in the picker's controls on our screen
             guard let id = p.guardedDisplayID else { break }
