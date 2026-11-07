@@ -125,10 +125,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var knownExternals: Set<String> = []
     private let alerts = PromptPanel()
     private var options = ResolveOptions() { didSet { pipeline?.options = effectiveOptions; refreshMenu(); updateHUD() } }
+    /// "Show only this app" (What others see / app window): everything else is hidden. For this run
+    /// only: a forgotten choice must not silently narrow the next meeting's share.
+    private var showOnlyApp: String? {
+        didSet { pipeline?.options = effectiveOptions; refreshMenu(); updateHUD(); preview.sync(showOnly: showOnlyApp, hiddenStyle: hiddenStyle) }
+    }
+    /// How the hidden part is masked: "blur" or "black" (remembered).
+    private var hiddenStyle = UserDefaults.standard.string(forKey: "hiddenStyle") ?? "blur" {
+        didSet {
+            UserDefaults.standard.set(hiddenStyle, forKey: "hiddenStyle")
+            pipeline?.options = effectiveOptions; refreshMenu(); preview.sync(showOnly: showOnlyApp, hiddenStyle: hiddenStyle)
+        }
+    }
     /// Session options plus App lock's apps masked whole-window in shares.
     private var effectiveOptions: ResolveOptions {
         var o = options
         if locker.isActive { o.forceMasked = Set(locker.config.apps) }
+        if let b = showOnlyApp { o.showOnly = [b] }
+        o.blanketMode = hiddenStyle == "black" ? .solid(color: .black) : .blur(radius: 40)
         if !notifications.unreadable { o.notificationBanners = notifications.banners.map { $0.frame } }
         return o
     }
@@ -272,7 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let dir = snapDir { p.snapshotDirectory = URL(fileURLWithPath: dir) }
         p.onPreview = { [weak self] img in
             guard let self = self, let p = self.pipeline else { return }
-            self.preview.setStatus("\(p.panic ? "PANIC · " : "")\(self.options.allowlistMode ? "allowlist · " : "")\(p.clock.summary().fps.rounded()) fps")
+            self.preview.setStatus("\(p.panic ? "PANIC · " : "")\(self.options.allowlistMode ? "allowlist · " : "")\(self.preview.isFullQuality ? "\(Int(p.clock.summary().fps.rounded())) fps" : "preview")")
         }
         pipeline = p
         pointerGuard = PointerGuard(virtualDisplayID: { [weak p] in p?.guardedDisplayID }, sourceDisplayID: { [weak p] in p?.source.id ?? CGMainDisplayID() })
@@ -508,6 +522,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func isBlanketed(_ bundleID: String) -> Bool {
         effectiveOptions.forceMasked.contains(bundleID)
             || (options.allowlistMode && !config.config.allowlist.contains(bundleID))
+            || (showOnlyApp != nil && showOnlyApp != bundleID)
     }
 
     /// Hold-to-reveal (press/release).
@@ -580,9 +595,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func setShowOnly(_ b: String?) {
+        guard b != showOnlyApp else { return }
+        showOnlyApp = b
+        Log.info("show only: \(b ?? "entire screen") (rest hidden with \(hiddenStyle))")
+    }
+
+    func setHiddenStyle(_ s: String) {
+        guard s != hiddenStyle else { return }
+        hiddenStyle = s
+        Log.info("hidden areas: \(s)")
+    }
+
     private func togglePreview() {
         guard let p = pipeline else { return }
         preview.onNeedsFrame = { [weak p] in p?.requestRerender() }
+        preview.onShowOnly = { [weak self] b in self?.setShowOnly(b) }
+        preview.onHiddenStyle = { [weak self] s in self?.setHiddenStyle(s) }
+        preview.sync(showOnly: showOnlyApp, hiddenStyle: hiddenStyle)
         preview.toggle(sourceDisplayID: p.source.id, device: p.metalDevice, context: p.redactor.context)
         p.mirror = preview.isVisible ? preview : nil
         if preview.isVisible && !p.state.isRunning { preview.setStatus("Not capturing: press Start to see the masked screen") }
@@ -754,6 +784,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if p.panic && p.state.isRunning { status = "PANIC — whole feed redacted" }
             if options.allowlistMode && p.state.isRunning { status += " · ALLOWLIST" }
+            if let b = showOnlyApp, p.state.isRunning {
+                status += " · only \(NSRunningApplication.runningApplications(withBundleIdentifier: b).first?.localizedName ?? b)"
+            }
             if !options.revealed.isEmpty { status += " · REVEALING \(options.revealed.joined(separator: ","))" }
             if !options.peeked.isEmpty { status += " · PEEKING \(options.peeked.joined(separator: ","))" }
             if p.state.isRunning, let m = meetings { latency += "\n" + m.statusText }
@@ -909,6 +942,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         a.askScreen = { _ = CGRequestScreenCaptureAccess() }
         a.askAX = { WindowEvacuator.requestTrust() }
         a.preview = { [weak self] in self?.togglePreview() }
+        a.setShowOnly = { [weak self] b in self?.setShowOnly(b); self?.updateModel() }
+        a.setHiddenStyle = { [weak self] s in self?.setHiddenStyle(s); self?.updateModel() }
         a.shortcuts = { [weak self] in self?.keysPanel.show(on: self?.launch.source.id ?? CGMainDisplayID()) }
         a.update = { [weak self] in self?.updateNowGuarded() }
         a.openMenu = { [weak self] in self?.menuBar.openMenu() }
@@ -982,6 +1017,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .map { AppModel.AppItem(id: $0.bundleIdentifier!, name: $0.localizedName ?? $0.bundleIdentifier!, on: false, detail: "") }
             .sorted { $0.name.lowercased() < $1.name.lowercased() }
         if m.runningApps != running { m.runningApps = running }
+        if m.showOnly != showOnlyApp { m.showOnly = showOnlyApp }
+        if m.hiddenStyle != hiddenStyle { m.hiddenStyle = hiddenStyle }
         let ver = UpdateChecker.currentVersion
         if m.version != ver { m.version = ver }
         var upd: String?
@@ -1676,7 +1713,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Log.info("script: ScreenCaptureKit lists sharemask windows: \(mine) (\(num.contains("window=") ? "" : ""))")
             }
         case "preview-big": preview.setSizeForTesting(NSSize(width: 1000, height: 674))
-        case "preview-unpin": preview.setPinForTesting(false)
+        case "preview-full": preview.setFullQualityForTesting(true)
+        case "preview-low": preview.setFullQualityForTesting(false)
+        case "preview-stay": preview.setFollowForTesting(false)
+        case "show-only-finder": setShowOnly("com.apple.finder")
+        case "show-all": setShowOnly(nil)
+        case "hidden-black": setHiddenStyle("black")
+        case "regions-summary":
+            let r = p.regionsForTesting()
+            var modes: [String: Int] = [:]
+            for x in r { let k: String; switch x.mode { case .solid: k = "black"; case .blur: k = "blur"; case .pixellate: k = "pixellate" }; modes[k, default: 0] += 1 }
+            let area = r.reduce(0.0) { $0 + Double($1.rect.width * $1.rect.height) }
+            let total = Double(p.source.geometry.pixelSize.width * p.source.geometry.pixelSize.height)
+            Log.info("script: regions \(r.count) \(modes.sorted { $0.key < $1.key }) covering ~\(Int(100 * area / max(total, 1)))% (overlaps counted twice)")
         case "picker-click-overlay": picker?.frontOverlayForTesting()
         case "picker-key-esc":   // test: a real Esc key event through AppKit's routing (reaches only the key window)
             if let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,

@@ -77,18 +77,24 @@ own list by setting `media.getdisplaymedia.screencapturekit.picker.enabled` to f
 `about:config`. That list also needs Zen/Firefox to have Screen Recording permission to show other
 apps' windows. ⌃⌥S makes this unnecessary.)
 
-## Recording the masked screen
+## What others see: preview, recording and showing one app
 
-You can record the masked screen with any screen recorder or screenshot tool (Raycast, QuickTime,
-⇧⌘5), with nothing extra to install:
-1. Press **Start** in the sharemask menu. Outside a meeting, nothing is being masked until you do.
-2. Open **What others see** (menu or app window).
-3. In your recorder, choose **Select window** and pick **What others see**.
+**What others see** (menu or app window) shows the masked screen. Its bottom bar:
 
-It shows the masked screen at full frame rate, at whatever size you make the window; make it
-bigger for a sharper recording. Turn off **Keep on top** in its bottom bar and it can go behind your
-other windows: recorders keep capturing a window while it's covered. Don't minimise it, though, and
-keep it on the desktop you're recording from.
+| Control | Choices |
+|---|---|
+| **Show** | **Entire screen**, or **only one app**: everything else, desktop included, is hidden. That app's own masks still apply (turn them off with ⌃⌥M or per app if you want). This changes what others see in the call too, and lasts until you change it or quit sharemask. The same menu is next to **What others see** in the app window. |
+| **Hide the rest with** | **Blur** or **Black**. Black looks like a normal single-app share. |
+| **Preview / Full quality** | Preview is cheap (about 10 frames a second) and can't be captured. **Full quality** draws every frame and can be picked by screen recorders, screenshot tools and calls under **Select window**. It uses noticeably more CPU (about a quarter of a core), so the window always opens in Preview. |
+| **Follow me / Stay here** | Follow me: on every desktop and full-screen app, above other windows. Stay here: a normal window on one desktop that can go behind others. |
+
+**To record or share just the masked screen** without sharing your real one:
+1. Press **Start**.
+2. Open **What others see** and switch to **Full quality**.
+3. In your recorder or call, choose **Select window** and pick **What others see**.
+
+The window never shows up inside itself. Make it bigger for a sharper picture, and don't minimise
+it. Recorders keep capturing it while other windows cover it.
 
 A recorder that lists *screens* can also record the invisible sharemask screen directly; in macOS's
 own picker, that's **Share entire screen**, then **⌃⌥S**.

@@ -221,6 +221,24 @@ final class ResolverOptionsTests: XCTestCase {
         var all = locked; all.revealed = ["chat"]
         XCTAssertTrue(RegionResolver.resolve(presets: base, windows: win, display: display, frontmostBundleID: nil, options: all).isEmpty)
     }
+    func testShowOnlyMasksEverythingElseInChosenStyleAndKeepsAppMasks() {
+        // "chat" has a drawn region (left half); show only chat, hide the rest in black.
+        let chat = w(1, "chat", CGRect(x: 200, y: 200, width: 200, height: 200))
+        let other = w(2, "other", CGRect(x: 600, y: 200, width: 200, height: 200))
+        var o = ResolveOptions()
+        o.showOnly = ["chat"]
+        o.blanketMode = .solid(color: .black)
+        let out = RegionResolver.resolve(presets: base, windows: [chat, other], display: display, frontmostBundleID: nil, options: o)
+        func covered(_ x: CGFloat, _ yTop: CGFloat) -> [PixelRegion] { out.filter { $0.rect.contains(CGPoint(x: x, y: 1000 - yTop)) } }
+        XCTAssertTrue(covered(700, 300).contains { $0.mode == .solid(color: .black) })   // other app: hidden, in black
+        XCTAssertTrue(covered(50, 50).contains { $0.mode == .solid(color: .black) })     // desktop: hidden
+        XCTAssertFalse(covered(350, 300).contains { $0.mode == .solid(color: .black) })  // chat's right half: shown
+        XCTAssertFalse(covered(250, 300).isEmpty)                                         // chat's own mask still applies
+        // showOnly takes the place of the presets' allowlist.
+        var p = base; p.allowlist = ["other"]
+        let out2 = RegionResolver.resolve(presets: p, windows: [chat, other], display: display, frontmostBundleID: nil, options: o)
+        XCTAssertTrue(out2.contains { $0.rect.contains(CGPoint(x: 700, y: 700)) && $0.mode == .solid(color: .black) })
+    }
     func testHelperWindowsCountAsTheirApp() {
         // Steam's window belongs to "Steam Helper" (com.valvesoftware.steam.helper).
         let helper = [w(1, "com.valvesoftware.steam.helper", CGRect(x: 0, y: 0, width: 200, height: 200))]
