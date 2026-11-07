@@ -77,13 +77,23 @@ own list by setting `media.getdisplaymedia.screencapturekit.picker.enabled` to f
 `about:config`. That list also needs Zen/Firefox to have Screen Recording permission to show other
 apps' windows. ⌃⌥S makes this unnecessary.)
 
+## Recording the masked screen
+
+Screen recorders can record the sharemask screen just like a call can share it. Press **Start** in
+the sharemask menu first, since outside a meeting the screen doesn't exist. Then:
+- in a recorder that lists screens, choose **sharemask**;
+- in one that uses macOS's own picker, choose **Share entire screen** and press **⌃⌥S**.
+
+A recorder that only lets you *click* the screen to record can't select it, because it's invisible.
+
 ## Region editor
 A transparent overlay sits exactly over the app's window (and follows it if it moves). Drag on
 empty space to draw a **rectangle, square or circle**; drag a shape to move it; drag its handles to
 resize; arrow keys nudge; Delete removes; Esc cancels; Enter saves. Each shape shows the actual
 pixellation preview, and the toolbar sets its mode (pixellate / blur / black) or drops in a
 template (left/right sidebar, top bar, whole window, centre circle). Regions are stored
-normalised to the window, so they keep fitting when the window is resized.
+normalised to the window, so they keep fitting when the window is resized. For a full-screen or
+maximised window, the toolbar sits at the bottom, clear of the menu bar.
 
 ## Capture only during meetings
 macOS shows its purple "recording" indicator whenever sharemask captures, and that cannot be

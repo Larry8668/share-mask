@@ -46,6 +46,15 @@ final class RegionPicker: NSObject {
         }
     }
 
+    /// Test hook: where the editor's windows are and who has focus.
+    func debugState() -> String {
+        func d(_ w: NSWindow?) -> String {
+            guard let w = w else { return "none" }
+            return "visible=\(w.isVisible) onActiveSpace=\(w.isOnActiveSpace) key=\(w.isKeyWindow) level=\(w.level.rawValue) frame=\(Int(w.frame.minX)),\(Int(w.frame.minY)) \(Int(w.frame.width))x\(Int(w.frame.height))"
+        }
+        return "overlay[\(d(overlay))] toolbar[\(d(toolbar))] sharemaskActive=\(NSApp.isActive) front=\(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?") screen=\(overlay?.screen.map { "\(Int($0.frame.width))x\(Int($0.frame.height)) visibleTop=\(Int($0.visibleFrame.maxY))" } ?? "?")"
+    }
+
     func bringToFront() {
         NSApp.activate(ignoringOtherApps: true)
         overlay?.makeKeyAndOrderFront(nil)
@@ -100,7 +109,9 @@ final class RegionPicker: NSObject {
         ed.onSelectionChange = { [weak self] in self?.syncToolbar() }
         editor = ed
 
-        let w = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        // A plain borderless window never becomes key, so Esc / Return / Delete never reached the
+        // editor (unnoticed while the toolbar was reachable; a full-screen app hid it).
+        let w = KeyableWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         w.isOpaque = false
         w.backgroundColor = .clear
         w.hasShadow = false
@@ -187,7 +198,13 @@ final class RegionPicker: NSObject {
     private func positionToolbar(_ p: NSPanel, above frame: NSRect) {
         let screen = overlay?.screen ?? NSScreen.main ?? NSScreen.screens[0]
         var origin = NSPoint(x: frame.midX - p.frame.width / 2, y: frame.maxY + 8)
-        if origin.y + p.frame.height > screen.visibleFrame.maxY { origin.y = frame.maxY - p.frame.height - 8 }
+        if origin.y + p.frame.height > screen.visibleFrame.maxY {
+            // No room above (maximised or full screen). Not inside the top edge: in full screen the
+            // menu bar and the app's own toolbar slide down over it when the pointer goes there.
+            // Below the window, or inside its bottom edge.
+            origin.y = frame.minY - p.frame.height - 8
+            if origin.y < screen.visibleFrame.minY + 4 { origin.y = max(frame.minY, screen.frame.minY) + 24 }
+        }
         origin.x = min(max(screen.visibleFrame.minX + 8, origin.x), screen.visibleFrame.maxX - p.frame.width - 8)
         p.setFrameOrigin(origin)
     }
@@ -286,4 +303,10 @@ private extension NSView {
     func sizeToFitIfPossible() {
         if let c = self as? NSControl { c.sizeToFit() }
     }
+}
+
+/// Borderless, but can take the keyboard (Esc cancels, Return saves, Delete removes a shape).
+private final class KeyableWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
 }
