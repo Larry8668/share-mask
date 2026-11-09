@@ -48,6 +48,15 @@ final class AppLocker {
         }
         return ids
     }
+    private static func isRealWindow(_ w: AXUIElement) -> Bool {
+        var v: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(w, kAXSizeAttribute as CFString, &v) == .success, let s = v,
+              CFGetTypeID(s) == AXValueGetTypeID() else { return true }   // size unknown: count it
+        var size = CGSize.zero
+        AXValueGetValue(s as! AXValue, .cgSize, &size)
+        return size.width >= 40 && size.height >= 40
+    }
+
     private func familyPIDs(_ app: NSRunningApplication) -> Set<pid_t> {
         guard let b = app.bundleIdentifier else { return [app.processIdentifier] }
         return Set(family(lockKey(for: b) ?? b).map(\.processIdentifier)).union([app.processIdentifier])
@@ -384,7 +393,9 @@ final class AppLocker {
         for pid in familyPIDs(app) {
             var value: CFTypeRef?
             let r = AXUIElementCopyAttributeValue(AXUIElementCreateApplication(pid), kAXWindowsAttribute as CFString, &value)
-            if r == .success, let wins = value as? [AXUIElement] { total = (total ?? 0) + wins.count }   // minimized included
+            // Minimized windows included, closed ones gone. Tiny ones don't count: Steam keeps an
+            // invisible 1x1 window open for good, so it never looked closed.
+            if r == .success, let wins = value as? [AXUIElement] { total = (total ?? 0) + wins.filter(AppLocker.isRealWindow).count }
             else if r == .noValue { total = total ?? 0 }
         }
         return total
@@ -601,6 +612,7 @@ final class AppLocker {
         Log.info("app lock test: covered \(b): \(shield.cover(b, apps: family(b)))")
     }
     func clickCoverForTesting(_ b: String) { shield.onClick?(b) }
+    func snapshotCoverForTesting(_ b: String, to path: String) { shield.snapshotForTesting(b, to: path) }
 
     /// Accessibility window count (incl. minimized), for callers that need to wait for a window.
     func windowCountFor(_ app: NSRunningApplication) -> Int { windowCount(app) ?? 0 }
