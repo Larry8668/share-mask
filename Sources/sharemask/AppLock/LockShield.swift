@@ -70,6 +70,15 @@ final class LockShield {
         panels.removeValue(forKey: b)?.forEach { $0.orderOut(nil) }
     }
 
+    /// Test hook: renders the first cover of `b` (sharemask's own view, nothing else) to a PNG.
+    func snapshotForTesting(_ b: String, to path: String) {
+        guard let v = panels[b]?.first?.contentView,
+              let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) else { Log.info("cover snapshot: no cover for \(b)"); return }
+        v.cacheDisplay(in: v.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        Log.info("cover snapshot written (\(Int(v.bounds.width))x\(Int(v.bounds.height)))")
+    }
+
     func removeAll() {
         for b in Array(panels.keys) { remove(b) }
     }
@@ -92,7 +101,17 @@ final class LockShield {
         iv.contentTintColor = .secondaryLabelColor
         iv.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(iv)
-        NSLayoutConstraint.activate([iv.centerXAnchor.constraint(equalTo: v.centerXAnchor), iv.centerYAnchor.constraint(equalTo: v.centerYAnchor)])
+        // A visible way to get the lock card back (clicking anywhere on the cover works too).
+        let unlock = FirstClickButton(title: "Unlock…", target: v, action: #selector(CoverView.unlockTapped))
+        unlock.image = NSImage(systemSymbolName: "touchid", accessibilityDescription: nil)
+        unlock.imagePosition = .imageLeading
+        unlock.bezelStyle = .rounded
+        unlock.controlSize = .regular
+        unlock.translatesAutoresizingMaskIntoConstraints = false
+        unlock.toolTip = "Unlock with Touch ID"
+        v.addSubview(unlock)
+        NSLayoutConstraint.activate([iv.centerXAnchor.constraint(equalTo: v.centerXAnchor), iv.centerYAnchor.constraint(equalTo: v.centerYAnchor, constant: -18),
+                                     unlock.centerXAnchor.constraint(equalTo: v.centerXAnchor), unlock.topAnchor.constraint(equalTo: iv.bottomAnchor, constant: 14)])
         p.contentView = v
         return p
     }
@@ -102,4 +121,10 @@ private final class CoverView: NSVisualEffectView {
     var onClick: (() -> Void)?
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) { onClick?() }
+    @objc func unlockTapped() { onClick?() }
+}
+
+/// The cover never becomes key; take the first click instead of spending it on focusing.
+private final class FirstClickButton: NSButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }

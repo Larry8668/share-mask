@@ -1719,6 +1719,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "show-only-finder": setShowOnly("com.apple.finder")
         case "show-all": setShowOnly(nil)
         case "hidden-black": setHiddenStyle("black")
+        case "close-steam-window":   // test: the red close button on Steam's store window (as the owner did)
+            for app in locker.family("com.valvesoftware.steam") {
+                var v: CFTypeRef?
+                AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute as CFString, &v)
+                for w in (v as? [AXUIElement]) ?? [] {
+                    var b: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(w, kAXCloseButtonAttribute as CFString, &b) == .success, let btn = b {
+                        let r = AXUIElementPerformAction(btn as! AXUIElement, kAXPressAction as CFString)
+                        Log.info("script: pressed close on a Steam window (\(r.rawValue))")
+                    }
+                }
+            }
+        case "cover-testapp": locker.coverForTesting(AppDelegate.testAppID)
+        case "snapshot-cover":
+            locker.snapshotCoverForTesting("dev.sharemask.stubborntest", to: ProcessInfo.processInfo.environment["SHAREMASK_COVER_PNG"] ?? "/dev/null")
+        case "click-cover-steam": locker.clickCoverForTesting("com.valvesoftware.steam")
+        case "ax-dump-steam":   // research: Accessibility windows of Steam and its helpers (no titles)
+            for app in locker.family("com.valvesoftware.steam") {
+                var v: CFTypeRef?
+                let r = AXUIElementCopyAttributeValue(AXUIElementCreateApplication(app.processIdentifier), kAXWindowsAttribute as CFString, &v)
+                let wins = (v as? [AXUIElement]) ?? []
+                let desc = wins.map { w -> String in
+                    var sr: CFTypeRef?, sz: CFTypeRef?, mn: CFTypeRef?
+                    AXUIElementCopyAttributeValue(w, kAXSubroleAttribute as CFString, &sr)
+                    AXUIElementCopyAttributeValue(w, kAXSizeAttribute as CFString, &sz)
+                    AXUIElementCopyAttributeValue(w, kAXMinimizedAttribute as CFString, &mn)
+                    var size = CGSize.zero
+                    if let s = sz, CFGetTypeID(s) == AXValueGetTypeID() { AXValueGetValue(s as! AXValue, .cgSize, &size) }
+                    return "\(sr as? String ?? "?") \(Int(size.width))x\(Int(size.height))\((mn as? Bool) == true ? " minimized" : "")"
+                }
+                Log.info("script: AX \(app.bundleIdentifier ?? "?") pid \(app.processIdentifier) policy \(app.activationPolicy.rawValue) (\(r.rawValue)): \(desc)")
+            }
         case "regions-summary":
             let r = p.regionsForTesting()
             var modes: [String: Int] = [:]
